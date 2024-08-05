@@ -48,8 +48,12 @@ from bpy_extras.io_utils import (
 
 # For vanilla behaviour, change this one to False
 DEF_IMPORT_ROOT_AS_BONE = True
+# For vanilla behaviour, change this one to False
+DEF_IMPORT_SCALE_INHERITANCE = True
 # For vanilla behaviour, change this one to 'ALWAYS'
 DEF_IMPORT_FPS_RULE = 'IF_FOUND'
+# For vanilla behaviour, change this one to False
+DEF_IMPORT_CUSTOM_FPS_FIX = True
 
 # For vanilla behaviour, change this one to False
 DEF_EXPORT_DONT_ADD_ARMATURE_BONE = True
@@ -160,6 +164,13 @@ class ImportFBX(bpy.types.Operator, ImportHelper):
         default=DEF_IMPORT_FPS_RULE,
     )
     # UnDrew Add End
+    # UnDrew Add Start : Time dilation fix when using Custom FPS.
+    UE3_custom_fps_fix: BoolProperty(
+        name="UE3 - Custom FPS fix",
+        description="Fixes an oversight where the Base part of a custom frame rate would get ignored when importing animations",
+        default=DEF_IMPORT_CUSTOM_FPS_FIX,
+    )
+    # UnDrew Add End
 
     use_subsurf: BoolProperty(
         name="Subdivision Data",
@@ -188,6 +199,13 @@ class ImportFBX(bpy.types.Operator, ImportHelper):
         name="UE3 - Import Root as Bone",
         description="If enabled, the root bone is preserved for models exported from Unreal",
         default=DEF_IMPORT_ROOT_AS_BONE,
+    )
+    # UnDrew Add End
+    # UnDrew Add Start : Support for importing scale inheritance (per-bone Inherit Scale property).
+    UE3_import_scale_inheritance: BoolProperty(
+        name="UE3 - Import Scale Inheritance",
+        description="If enabled, the per-bone Inherit Scale property is correctly imported (AHiT always uses 'Aligned')",
+        default=DEF_IMPORT_SCALE_INHERITANCE,
     )
     # UnDrew Add End
     force_connect_children: BoolProperty(
@@ -311,6 +329,9 @@ def import_panel_animation(layout, operator):
         # UnDrew Add Start : A way to skip importing the FPS.
         body.prop(operator, "UE3_fps_import_rule")
         # UnDrew Add End
+        # UnDrew Add Start : Time dilation fix when using Custom FPS.
+        body.prop(operator, "UE3_custom_fps_fix")
+        # UnDrew Add End
 
 
 def import_panel_armature(layout, operator):
@@ -326,6 +347,9 @@ def import_panel_armature(layout, operator):
         sub.prop(operator, "secondary_bone_axis")
         # UnDrew Add Start : Fix for Blender interpreting the root bone as the Armature.
         body.prop(operator, "UE3_import_root_as_bone")
+        # UnDrew Add End
+        # UnDrew Add Start : Support for importing scale inheritance (per-bone Inherit Scale property).
+        body.prop(operator, "UE3_import_scale_inheritance")
         # UnDrew Add End
 
 

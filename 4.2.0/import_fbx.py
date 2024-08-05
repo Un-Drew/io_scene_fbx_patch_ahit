@@ -1069,7 +1069,7 @@ def blen_read_animations_action_item(action, item, cnodes, fps, anim_offset, glo
         blen_store_keyframes_multi(combined_fbx_times, zip(blen_curves, channel_values), anim_offset, fps, fbx_ktime)
 
 
-def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_offset, global_scale, fbx_ktime):
+def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_offset, UE3_custom_fps_fix, global_scale, fbx_ktime):
     """
     Recreate an action per stack/layer/object combinations.
     Only the first found action is linked to objects, more complex setups are not handled,
@@ -1115,10 +1115,10 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
                 if not id_data.animation_data.action:
                     id_data.animation_data.action = action
                 # And actually populate the action!
-                # UnDrew TODO: In 4.0, scene.render.fps had to be divided by fps_base. Changes have been made in 4.1,
-                #              see if this is necessary before adding it back!
-                blen_read_animations_action_item(action, item, cnodes, scene.render.fps, anim_offset, global_scale,
+                # UnDrew Edit Start : Divide by fps_base to use the *final* fps.
+                blen_read_animations_action_item(action, item, cnodes, (scene.render.fps / scene.render.fps_base) if UE3_custom_fps_fix else scene.render.fps, anim_offset, global_scale,
                                                  shape_key_values, fbx_ktime)
+                # UnDrew Edit End
 
     # If the minimum/maximum animated value is outside the slider range of the shape key, attempt to expand the slider
     # range until the animated range fits and has extra room to be decreased or increased further.
@@ -2715,11 +2715,14 @@ class FbxImportHelperNode:
 
         # UnDrew Add Start : Set the proper inherit_scale value based on FBX's InheritType.
         # TODO: This is not accurate when there's different InheritTypes in the same skeleton. Oh well!
-        bone.inherit_scale = {
-            0: 'ALIGNED',   # 0 = RrSs
-            1: 'FULL',      # 1 = RSrs
-            2: 'NONE'       # 2 = Rrs
-        }.get(self.fbx_transform_data.inherit_type, 'FULL')
+        if settings.UE3_import_scale_inheritance:
+            bone.inherit_scale = {
+                0: 'ALIGNED',   # 0 = RrSs
+                1: 'FULL',      # 1 = RSrs
+                2: 'NONE'       # 2 = Rrs
+            }.get(self.fbx_transform_data.inherit_type, 'FULL')
+        else:
+            bone.inherit_scale = 'FULL'
         # UnDrew Add End
 
         force_connect_children = settings.force_connect_children
@@ -3083,7 +3086,9 @@ def load(operator, context, filepath="",
          ignore_leaf_bones=False,
          # UnDrew Add Start : New import settings.
          UE3_import_root_as_bone=True,
+         UE3_import_scale_inheritance=True,
          UE3_fps_import_rule='IF_FOUND',   # doesn't need to be passed in the settings tuple, it's only used here.
+         UE3_custom_fps_fix=True,   # ...neither does this.
          # UnDrew Add End
          force_connect_children=False,
          automatic_bone_orientation=False,
@@ -3240,7 +3245,7 @@ def load(operator, context, filepath="",
         nodal_material_wrap_map, image_cache,
         ignore_leaf_bones, force_connect_children, automatic_bone_orientation, bone_correction_matrix,
         # UnDrew Add Start : New import settings.
-        UE3_import_root_as_bone,
+        UE3_import_root_as_bone, UE3_import_scale_inheritance,
         # UnDrew Add End
         use_prepost_rot, colors_type,
     )
@@ -3882,7 +3887,7 @@ def load(operator, context, filepath="",
                     curvenodes[acn_uuid][ac_uuid] = (fbx_acitem, channel)
 
             # And now that we have sorted all this, apply animations!
-            blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, settings.anim_offset, global_scale,
+            blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, settings.anim_offset, UE3_custom_fps_fix, global_scale,
                                  fbx_ktime)
 
         _()
