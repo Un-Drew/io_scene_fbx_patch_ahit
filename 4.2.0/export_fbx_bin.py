@@ -3227,12 +3227,28 @@ def fbx_header_elements(root, scene_data, time=None):
     time is expected to be a datetime.datetime object, or None (using now() in this case).
     """
     app_vendor = "Blender Foundation"
-    app_name = "Blender (stable FBX IO)"
+    app_name = "Blender (stable FBX IO - AHiT patch)"
     app_ver = bpy.app.version_string
+
+    # UnDrew Edit Start : Seemingly can't use bl_info for extensions. Read version from TOML directly... I guess.
+    addon_ver = "Unknown add-on version"
+    try:
+        import toml
+        with open(os.path.join(os.path.dirname(__file__), 'blender_manifest.toml'), 'r') as f:
+            config = toml.load(f)
+            addon_ver = config['version']
+        del toml
+    except:
+        pass
+    
+    """ vvv Original code vvv
 
     from . import bl_info
     addon_ver = bl_info["version"]
     del bl_info
+
+    """
+    # UnDrew Edit End
 
     # ##### Start of FBXHeaderExtension element.
     header_ext = elem_empty(root, b"FBXHeaderExtension")
@@ -3256,8 +3272,10 @@ def fbx_header_elements(root, scene_data, time=None):
     elem_data_single_int32(elem, b"Second", time.second)
     elem_data_single_int32(elem, b"Millisecond", time.microsecond // 1000)
 
-    elem_data_single_string_unicode(header_ext, b"Creator", "%s - %s - %d.%d.%d"
-                                                % (app_name, app_ver, addon_ver[0], addon_ver[1], addon_ver[2]))
+    # UnDrew Edit Start : addon_ver was changed to a string - white it as one.
+    elem_data_single_string_unicode(header_ext, b"Creator", "%s - %s - %s"
+                                                % (app_name, app_ver, addon_ver))
+    # UnDrew Edit End
 
     # 'SceneInfo' seems mandatory to get a valid FBX file...
     # TODO use real values!
@@ -3302,8 +3320,10 @@ def fbx_header_elements(root, scene_data, time=None):
                                     "".format(time.year, time.month, time.day, time.hour, time.minute, time.second,
                                               time.microsecond * 1000))
 
-    elem_data_single_string_unicode(root, b"Creator", "%s - %s - %d.%d.%d"
-                                          % (app_name, app_ver, addon_ver[0], addon_ver[1], addon_ver[2]))
+    # UnDrew Edit Start : addon_ver was changed to a string - white it as one.
+    elem_data_single_string_unicode(root, b"Creator", "%s - %s - %s"
+                                          % (app_name, app_ver, addon_ver))
+    # UnDrew Edit End
 
     # ##### Start of GlobalSettings element.
     global_settings = elem_empty(root, b"GlobalSettings")
