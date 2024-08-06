@@ -869,7 +869,7 @@ def export_panel_UE3_batch_anims(layout, operator):
 
 class IO_FH_fbx_patch_ahit(bpy.types.FileHandler):
     bl_idname = "IO_FH_fbx_patch_ahit"
-    bl_label = "FBX"
+    bl_label = "FBX - AHiT patch"
     bl_import_operator = "import_scene_patch_ahit.fbx"
     bl_export_operator = "export_scene_patch_ahit.fbx"
     bl_file_extensions = ".fbx"
