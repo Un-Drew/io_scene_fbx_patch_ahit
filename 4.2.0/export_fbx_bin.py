@@ -3690,15 +3690,21 @@ def save_single(operator, scene, depsgraph, filepath="",
             # Clear animations so they're not exported here.
             scene_data.animations.clear()
 
-            root = elem_empty(None, b"")
-            fbx_header_elements(root, scene_data)
-            fbx_documents_elements(root, scene_data)
-            fbx_references_elements(root, scene_data)
-            fbx_definitions_elements(root, scene_data)
-            fbx_objects_elements(root, scene_data)
-            fbx_connections_elements(root, scene_data)
-            fbx_takes_elements(root, scene_data)
+            write_start = time.process_time()
+
+            with encode_bin.FBXElem.enable_multithreading_cm():
+                root = elem_empty(None, b"")
+                fbx_header_elements(root, scene_data)
+                fbx_documents_elements(root, scene_data)
+                fbx_references_elements(root, scene_data)
+                fbx_definitions_elements(root, scene_data)
+                fbx_objects_elements(root, scene_data)
+                fbx_connections_elements(root, scene_data)
+                fbx_takes_elements(root, scene_data)
+
             encode_bin.write(filepath, root, FBX_VERSION)
+
+            print('Spent %.4f sec. writing %r' % (time.process_time() - write_start, filepath))
 
             # Restore them (leaving things as we found them).
             scene_data.animations += all_animations
@@ -3846,16 +3852,25 @@ def save_single(operator, scene, depsgraph, filepath="",
             )
 
             # Then the actual export.
-            root = elem_empty(None, b"")
-            fbx_header_elements(root, anim_scene_data)
-            fbx_documents_elements(root, anim_scene_data)
-            fbx_references_elements(root, anim_scene_data)
-            fbx_definitions_elements(root, anim_scene_data)
-            fbx_objects_elements(root, anim_scene_data)
-            fbx_connections_elements(root, anim_scene_data)
-            fbx_takes_elements(root, anim_scene_data)
+
             # anim[3] is the animation's name. Decode to a string, since it seems ( bpy.path.clean_name ) has an oversight with bytes.
-            encode_bin.write(os.path.join(root_path, bpy.path.clean_name(anim[3].decode(errors='replace')) + ".fbx"), root, FBX_VERSION)
+            output_path = os.path.join(root_path, bpy.path.clean_name(anim[3].decode(errors='replace')) + ".fbx")
+
+            write_start = time.process_time()
+
+            with encode_bin.FBXElem.enable_multithreading_cm():
+                root = elem_empty(None, b"")
+                fbx_header_elements(root, anim_scene_data)
+                fbx_documents_elements(root, anim_scene_data)
+                fbx_references_elements(root, anim_scene_data)
+                fbx_definitions_elements(root, anim_scene_data)
+                fbx_objects_elements(root, anim_scene_data)
+                fbx_connections_elements(root, anim_scene_data)
+                fbx_takes_elements(root, anim_scene_data)
+
+            encode_bin.write(output_path, root, FBX_VERSION)
+
+            print('Spent %.4f sec. writing %r' % (time.process_time() - write_start, output_path))
 
             """ Debug stuff...
             
@@ -3882,7 +3897,7 @@ def save_single(operator, scene, depsgraph, filepath="",
             for ob_obj in anim_scene_data.objects:
                 print("    ", ob_obj)
             print_scene_data_stuff((scene_data, anim_scene_data))
-            
+
             """
 
         # Then finally, after all exports, cleanup. (like temp meshes)
