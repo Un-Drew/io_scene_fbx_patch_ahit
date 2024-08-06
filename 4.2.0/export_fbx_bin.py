@@ -3857,14 +3857,18 @@ def save_single(operator, scene, depsgraph, filepath="",
             # anim[3] is the animation's name. Decode to a string, since it seems ( bpy.path.clean_name ) has an oversight with bytes.
             encode_bin.write(os.path.join(root_path, bpy.path.clean_name(anim[3].decode(errors='replace')) + ".fbx"), root, FBX_VERSION)
 
-            # TODO: Debug stuff, comment me!
+            """ Debug stuff...
+            
             def print_scene_data_stuff(scene_datas):
                 to_print = (
                     ("data_empties", "EMPTIES"),
                     ("data_lights", "LIGHTS"),
                     ("data_cameras", "CAMERAS"),
                     ("data_meshes", "MESHES"),
+                    ("data_materials", "MATERIALS"),
                     ("mesh_material_indices", "MATERIAL INDICES"),
+                    ("data_textures", "TEXTURES"),
+                    ("data_videos", "VIDEOS"),
                     ("data_bones", "BONES"),
                     ("data_leaf_bones", "LEAF BONES"),
                     ("data_deformers_skin", "SKIN DEFORMERS"),
@@ -3872,12 +3876,14 @@ def save_single(operator, scene, depsgraph, filepath="",
                 )
                 for attr, name in to_print:
                     for i, s in enumerate(scene_datas):
-                        # 200 char limit, enough for me to get *the gist* of it.
-                        print(str(i + 1) + ")", name + ":", '%.200s' % str(getattr(s, attr)))
+                        # 400 char limit, enough for me to get *the gist* of it.
+                        print(str(i + 1) + ")", name + ":", '%.400s' % str(getattr(s, attr)))
             print("Listing objects involved in animation:", anim[3])
             for ob_obj in anim_scene_data.objects:
                 print("    ", ob_obj)
             print_scene_data_stuff((scene_data, anim_scene_data))
+            
+            """
 
         # Then finally, after all exports, cleanup. (like temp meshes)
         fbx_scene_data_cleanup(scene_data)
