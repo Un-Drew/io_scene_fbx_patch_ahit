@@ -3681,14 +3681,15 @@ def save_single(operator, scene, depsgraph, filepath="",
     scene_data = fbx_data_from_scene(scene, depsgraph, settings)
 
     # UnDrew Add Start : Batch-export animations, if enabled. (else: Vanilla behaviour)
-    if scene_data.settings.bake_anim and kwargs["UE3_batch_anims"] and scene_data.animations:
+    if scene_data.settings.bake_anim and kwargs["UE3_batch_anims"]:
         # Copy the animations list, since we'll wanna export each animation individually.
-        all_animations = scene_data.animations.copy()
+        all_animations = scene_data.animations.copy() if scene_data.animations else ()
 
         # Let's export the main file, if needed.
         if not kwargs["UE3_batch_skip_main"]:
             # Clear animations so they're not exported here.
-            scene_data.animations.clear()
+            if type(scene_data.animations) is list:
+                scene_data.animations.clear()
 
             write_start = time.process_time()
 
@@ -3707,38 +3708,41 @@ def save_single(operator, scene, depsgraph, filepath="",
             print('Spent %.4f sec. writing %r' % (time.process_time() - write_start, filepath))
 
             # Restore them (leaving things as we found them).
-            scene_data.animations += all_animations
+            if type(scene_data.animations) is list:
+                # NOTE: Use extend() since += behaves a bit weirdly...
+                scene_data.animations.extend(all_animations)
         
-        # Create the base root path for our batched animations.
-        root_path = os.path.abspath(os.path.join(os.path.dirname(filepath), kwargs["UE3_batch_subpath"]))
-        if not os.path.exists(root_path):
-            os.makedirs(root_path)
+        if all_animations:
+            # Create the base root path for our batched animations.
+            root_path = os.path.abspath(os.path.join(os.path.dirname(filepath), kwargs["UE3_batch_subpath"]))
+            if not os.path.exists(root_path):
+                os.makedirs(root_path)
 
-        # Get object cache to be able to turn wrapper keys back into objects (necessary to get animation users).
-        object_wrapper_cache = getattr(ObjectWrapper, "_cache", None)
-        assert(object_wrapper_cache is not None)   # This should ALWAYS be valid.
+            # Get object cache to be able to turn wrapper keys back into objects (necessary to get animation users).
+            object_wrapper_cache = getattr(ObjectWrapper, "_cache", None)
+            assert(not all_animations or object_wrapper_cache is not None)   # This should ALWAYS be valid.
 
-        UE3_batch_object_filter = kwargs["UE3_batch_object_filter"]
+            UE3_batch_object_filter = kwargs["UE3_batch_object_filter"]
 
-        # Cross-export variables.
+            # Cross-export variables.
 
-        anim_objects = scene_data.objects
-        anim_data_empties = scene_data.data_empties
-        anim_data_lights = scene_data.data_lights
-        anim_data_cameras = scene_data.data_cameras
-        anim_data_meshes = scene_data.data_meshes
-        anim_mesh_material_indices = scene_data.mesh_material_indices
-        anim_data_bones = scene_data.data_bones
-        anim_data_leaf_bones = scene_data.data_leaf_bones
-        anim_data_deformers_skin = scene_data.data_deformers_skin
-        anim_data_deformers_shape = scene_data.data_deformers_shape
-        anim_data_materials = scene_data.data_materials
-        anim_data_textures = scene_data.data_textures
-        anim_data_videos = scene_data.data_videos
+            anim_objects = scene_data.objects
+            anim_data_empties = scene_data.data_empties
+            anim_data_lights = scene_data.data_lights
+            anim_data_cameras = scene_data.data_cameras
+            anim_data_meshes = scene_data.data_meshes
+            anim_mesh_material_indices = scene_data.mesh_material_indices
+            anim_data_bones = scene_data.data_bones
+            anim_data_leaf_bones = scene_data.data_leaf_bones
+            anim_data_deformers_skin = scene_data.data_deformers_skin
+            anim_data_deformers_shape = scene_data.data_deformers_shape
+            anim_data_materials = scene_data.data_materials
+            anim_data_textures = scene_data.data_textures
+            anim_data_videos = scene_data.data_videos
 
-        prev_anim_objects = None
-        prev_anim_objects_no_bones = None
-        curr_anim_list = [None]
+            prev_anim_objects = None
+            prev_anim_objects_no_bones = None
+            curr_anim_list = [None]
 
         # Then, export each individual animation.
         for anim in all_animations:
@@ -4332,7 +4336,8 @@ def UE3_gather_empty_chains(objects):
                 if curr_parent is c[-1]:
                     # The last element of this chain matches with the soon-to-be first
                     # element of the current chain. So stop generating it and merge.
-                    c += curr_chain
+                    # NOTE: Use extend() since += behaves a bit weirdly...
+                    c.extend(curr_chain)
                     did_merge = True
                     break
             if did_merge:
@@ -4344,8 +4349,6 @@ def UE3_gather_empty_chains(objects):
             curr_parent = curr_parent.parent
 
         # The "while" loop ended without merging, so this is a brand new chain.
-        # NOTE: I'm keeping these lists, so += can be used to modify the entry.
-        #       There's probably better ways to do this though..?
         if not did_merge:
             empty_chains.append(curr_chain)
     return empty_chains
