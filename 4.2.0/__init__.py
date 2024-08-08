@@ -2,18 +2,20 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+# UnDrew Edit Start : Differentiate from the base add-on.
 bl_info = {
-    "name": "FBX format",
-    "author": "Campbell Barton, Bastien Montagne, Jens Restemeier, @Mysteryem",
-    "version": (5, 12, 4),
+    "name": "FBX format - AHiT patch",
+    "author": "Original add-on by: Campbell Barton, Bastien Montagne, Jens Restemeier, @Mysteryem. Modified by: UnDrew",
+    "version": (4, 2, 0),
     "blender": (4, 2, 0),
     "location": "File > Import-Export",
-    "description": "FBX IO meshes, UVs, vertex colors, materials, textures, cameras, lamps and actions",
+    "description": "Modified FBX add-on; fixes some compatibility issues with AHiT",
     "warning": "",
     "doc_url": "{BLENDER_MANUAL_URL}/addons/import_export/scene_fbx.html",
-    "support": 'OFFICIAL',
+    "support": 'COMMUNITY',
     "category": "Import-Export",
 }
+# UnDrew Edit End
 
 
 if "bpy" in locals():
@@ -70,7 +72,7 @@ DEF_EXPORT_ADD_LEAF_BONES = False
 @orientation_helper(axis_forward='-Z', axis_up='Y')
 class ImportFBX(bpy.types.Operator, ImportHelper):
     """Load a FBX file, using the patched importer"""
-    bl_idname = "import_scene_patch_ahit.fbx"
+    bl_idname = "import_scene_patch_ahit.fbx"  # UnDrew Edit : Avoid conflicts.
     bl_label = "Import FBX"
     bl_options = {'UNDO', 'PRESET'}
 
@@ -356,7 +358,7 @@ def import_panel_armature(layout, operator):
 @orientation_helper(axis_forward='-Z', axis_up='Y')
 class ExportFBX(bpy.types.Operator, ExportHelper):
     """Write a FBX file, using the patched exporter"""
-    bl_idname = "export_scene_patch_ahit.fbx"
+    bl_idname = "export_scene_patch_ahit.fbx"  # UnDrew Edit : Avoid conflicts.
     bl_label = "Export FBX"
     bl_options = {'UNDO', 'PRESET'}
 
@@ -646,7 +648,7 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
     # UnDrew Add End
     # UnDrew Add Start : Batch export Anims.
     UE3_batch_anims: BoolProperty(
-        name="UE3 Batch Export Anims",
+        name="UE3 - Batch Export Anims",
         description="Exports all animations as separate FBX files, instead of putting them into the main file. "
                     "Necessary for UE3, which can't import animations from the same file with the right durations",
         default=False,
@@ -857,7 +859,7 @@ def export_panel_UE3_batch_anims(layout, operator):
     header, body = layout.panel("FBX_export_UE3_batch_anims", default_closed=True)
     header.use_property_split = False
     header.prop(operator, "UE3_batch_anims", text="")
-    header.label(text="UE3 Batch Export Anims")
+    header.label(text="UE3 - Batch Export Anims")
     header.enabled = operator.bake_anim
     if body:
         body.enabled = operator.bake_anim and operator.UE3_batch_anims
@@ -867,6 +869,7 @@ def export_panel_UE3_batch_anims(layout, operator):
 # UnDrew Add End
 
 
+# UnDrew Edit Start : Ranames. For clarity, and to avoid conflicts.
 class IO_FH_fbx_patch_ahit(bpy.types.FileHandler):
     bl_idname = "IO_FH_fbx_patch_ahit"
     bl_label = "FBX - AHiT patch"
@@ -892,6 +895,7 @@ classes = (
     ExportFBX,
     IO_FH_fbx_patch_ahit,
 )
+# UnDrew Edit End
 
 
 def register():
