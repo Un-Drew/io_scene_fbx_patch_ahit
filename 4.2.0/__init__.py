@@ -625,22 +625,22 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
     )
     UE3_nla_use_tracks_instead: BoolProperty(
         name="UE3 NLA - Modular Anim Support",
-        description="By default, when using NLA animation, animations are exported on a per-strip basis. "
+        description="By default, when using NLA, animations are exported on a per-strip basis. "
                     "Turning this setting on will export animations on a per-track basis, so multiple animations on the "
                     "same row will be exported, in full, as one single animation. Plus, additive animations placed above "
-                    "other tracks will be baked in as well - rather than being individually exported",
+                    "will be merged down - rather than being individually exported",
         default=False,
     )
     UE3_nla_only_animate_owner: BoolProperty(
         name="UE3 NLA - Only Animate Owner",
-        description="By default, NLA animations will bake the entire exported scene - even unrelated objects. "
-                    "Turning this setting on will make sure these animations only contain the relevant object",
+        description="By default, NLA animations will bake the entire exported scene - even unrelated objects, which is unnecessary. "
+                    "Turning this setting on will make sure these animations only track their owner object",
         default=True,
     )
     UE3_nla_all_mode: BoolProperty(
         name="UE3 NLA - Force Export",
         description="By default, NLA tracks that are disabled (muted) are skipped during export. "
-                    "Turning this setting on will force all NLA tracks to be exported",
+                    "Turning this setting on will force all NLA tracks to be ALWAYS exported",
         default=False,
     )
     # UnDrew Add End
