@@ -2486,7 +2486,7 @@ def fbx_animations(scene_data):
                         if strip.mute:
                             continue
                         all_strips_disabled = False
-                        if strip.blend_type != 'ADD':
+                        if strip.blend_type == 'REPLACE':
                             track_additive = False
                         if group_frame_start is None:
                             group_frame_start = strip.frame_start
