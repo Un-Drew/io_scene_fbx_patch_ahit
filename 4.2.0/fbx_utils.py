@@ -2013,7 +2013,7 @@ FBXExportSettings = namedtuple("FBXExportSettings", (
     "armature_nodetype", "use_armature_deform_only", "add_leaf_bones",
     # UnDrew Add Start : New settings that need to be passed to the exporter's "settings" var.
     "UE3_dont_add_armature_bone", "UE3_matrix_double_precision",
-    "UE3_rest_default_pose", "UE3_remove_anim_object_prefix", "UE3_nla_use_tracks_instead", "UE3_nla_only_animate_owner", "UE3_nla_all_mode",
+    "UE3_rest_default_pose", "UE3_remove_anim_object_prefix", "UE3_nla_modular_anim_support", "UE3_nla_only_animate_owner", "UE3_nla_force_export",
     # UnDrew Add End
     # UnDrew Add Start : Not settings, but should be held here for performance reasons.
     "UE3_global_matrix_no_scale",

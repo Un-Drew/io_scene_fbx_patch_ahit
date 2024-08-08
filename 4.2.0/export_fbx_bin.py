@@ -2471,13 +2471,13 @@ def fbx_animations(scene_data):
             ob_actions.append((ob, ob.animation_data.action, restore_use_tweak_mode))
             ob.animation_data.action = None
             # UnDrew Add Start : ALL Mode support + Support for using NLA tracks instead (else: vanilla behaviour).
-            if scene_data.settings.UE3_nla_use_tracks_instead:
+            if scene_data.settings.UE3_nla_modular_anim_support:
                 group_tracks = []
                 group_frame_start = None
                 group_frame_end = None
                 # Let's hope using "reversed" here doesn't cause any memory/performance issues :/
                 for track in reversed(ob.animation_data.nla_tracks):
-                    if not scene_data.settings.UE3_nla_all_mode and track.mute:
+                    if not scene_data.settings.UE3_nla_force_export and track.mute:
                         continue
                     # Find out the time range of this track, and whether it's additive.
                     all_strips_disabled = True
@@ -2510,7 +2510,7 @@ def fbx_animations(scene_data):
                 # UnDrew Edit Start : ALL Mode support. Remember the owning object of every strip as well.
                 for track in ob.animation_data.nla_tracks:
                     if track.mute:
-                        if scene_data.settings.UE3_nla_all_mode:
+                        if scene_data.settings.UE3_nla_force_export:
                             og_muted_tracks.add(track)
                             track.mute = False
                         else:
@@ -2523,7 +2523,7 @@ def fbx_animations(scene_data):
                 # UnDrew Edit End
 
         # UnDrew Add Start : Support for using NLA tracks instead (else: vanilla behaviour).
-        if scene_data.settings.UE3_nla_use_tracks_instead:
+        if scene_data.settings.UE3_nla_modular_anim_support:
             for group_tracks, og_mute_state, ob_obj, group_frame_start, group_frame_end in all_grouped_tracks:
                 for track in group_tracks:
                     track.mute = False
@@ -3575,9 +3575,9 @@ def save_single(operator, scene, depsgraph, filepath="",
                 UE3_matrix_double_precision=False,
                 UE3_rest_default_pose=True,
                 UE3_remove_anim_object_prefix=True,
-                UE3_nla_use_tracks_instead=True,
+                UE3_nla_modular_anim_support=True,
                 UE3_nla_only_animate_owner=True,
-                UE3_nla_all_mode=False,
+                UE3_nla_force_export=False,
                 # UnDrew Add End
                 primary_bone_axis='Y',
                 secondary_bone_axis='X',
@@ -3661,7 +3661,7 @@ def save_single(operator, scene, depsgraph, filepath="",
         armature_nodetype, use_armature_deform_only, add_leaf_bones,
         # UnDrew Add Start : New export settings.
         UE3_dont_add_armature_bone, UE3_matrix_double_precision,
-        UE3_rest_default_pose, UE3_remove_anim_object_prefix, UE3_nla_use_tracks_instead, UE3_nla_only_animate_owner, UE3_nla_all_mode,
+        UE3_rest_default_pose, UE3_remove_anim_object_prefix, UE3_nla_modular_anim_support, UE3_nla_only_animate_owner, UE3_nla_force_export,
         # UnDrew Add End
         # UnDrew Add Start : Not settings, but should be held here for performance reasons.
         UE3_global_matrix_no_scale,

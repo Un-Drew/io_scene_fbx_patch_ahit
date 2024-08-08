@@ -623,7 +623,7 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
         description="By default, exported actions append the object's name at the beginning. Turning this setting on prevents that",
         default=True,
     )
-    UE3_nla_use_tracks_instead: BoolProperty(
+    UE3_nla_modular_anim_support: BoolProperty(
         name="UE3 NLA - Modular Anim Support",
         description="By default, when using NLA, animations are exported on a per-strip basis. "
                     "Turning this setting on will export animations on a per-track basis, so multiple animations on the "
@@ -637,7 +637,7 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
                     "Turning this setting on will make sure these animations only track their owner object",
         default=True,
     )
-    UE3_nla_all_mode: BoolProperty(
+    UE3_nla_force_export: BoolProperty(
         name="UE3 NLA - Force Export",
         description="By default, NLA tracks that are disabled (muted) are skipped during export. "
                     "Turning this setting on will force all NLA tracks to be ALWAYS exported",
@@ -846,9 +846,9 @@ def export_panel_animation(layout, operator):
         sublayout.use_property_split = False  # These property names are pretty long, let's use all available space.
         sublayout.prop(operator, "UE3_rest_default_pose")
         sublayout.prop(operator, "UE3_remove_anim_object_prefix")
-        sublayout.prop(operator, "UE3_nla_use_tracks_instead")
+        sublayout.prop(operator, "UE3_nla_modular_anim_support")
         sublayout.prop(operator, "UE3_nla_only_animate_owner")
-        sublayout.prop(operator, "UE3_nla_all_mode")
+        sublayout.prop(operator, "UE3_nla_force_export")
         # UnDrew Add End
 
 
