@@ -3720,7 +3720,7 @@ def save_single(operator, scene, depsgraph, filepath="",
 
             # Get object cache to be able to turn wrapper keys back into objects (necessary to get animation users).
             object_wrapper_cache = getattr(ObjectWrapper, "_cache", None)
-            assert(not all_animations or object_wrapper_cache is not None)   # This should ALWAYS be valid.
+            assert(object_wrapper_cache is not None)   # This should ALWAYS be valid.
 
             UE3_batch_object_filter = kwargs["UE3_batch_object_filter"]
 
