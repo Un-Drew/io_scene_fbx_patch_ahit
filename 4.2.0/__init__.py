@@ -629,7 +629,7 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
                     "Turning this setting on will export animations on a per-track basis, so multiple animations on the "
                     "same row will be exported, in full, as one single animation. Plus, additive animations placed above "
                     "other tracks will be baked in as well - rather than being individually exported",
-        default=True,
+        default=False,
     )
     UE3_nla_only_animate_owner: BoolProperty(
         name="UE3 NLA - Only Animate Owner",
