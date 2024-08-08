@@ -9,8 +9,7 @@ tagline = "Modified FBX add-on; fixes some compatibility issues with AHiT"
 maintainer = "Original add-on by: Campbell Barton, Bastien Montagne, Jens Restemeier, @Mysteryem. Modified by: UnDrew"
 type = "add-on"
 
-# Doesn't have a website of its own, so passing the website for the original add-on.
-website = "https://docs.blender.org/manual/en/4.2/addons/import_export/scene_fbx.html"
+website = "https://github.com/Un-Drew/io_scene_fbx_patch_ahit"
 
 # Optional list defined by Blender and server, see:
 # https://docs.blender.org/manual/en/dev/advanced/extensions/tags.html
