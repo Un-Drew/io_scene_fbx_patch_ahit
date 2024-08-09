@@ -62,7 +62,15 @@ DEF_EXPORT_DONT_ADD_ARMATURE_BONE = True
 # For vanilla behaviour, change this one to False
 DEF_EXPORT_MATRIX_DOUBLE_PRECISION = False
 # For vanilla behaviour, change this one to False
+DEF_EXPORT_NLA_MODULAR_ANIM_SUPPORT = False
+# For vanilla behaviour, change this one to False
+DEF_EXPORT_NLA_FORCE_EXPORT = False
+# For vanilla behaviour, change this one to False
+DEF_EXPORT_NLA_ONLY_ANIMATE_OWNER = True
+# For vanilla behaviour, change this one to False
 DEF_EXPORT_REST_DEFAULT_POSE = True
+# For vanilla behaviour, change this one to False
+DEF_EXPORT_REMOVE_ANIM_OBJECT_PREFIX = True
 # For vanilla behaviour, change this one to True
 DEF_EXPORT_ADD_LEAF_BONES = False
 
@@ -614,6 +622,26 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
         default=1.0,  # default: min slope: 0.005, max frame step: 10.
     )
     # UnDrew Add Start : Extended animation export properties.
+    UE3_nla_modular_anim_support: BoolProperty(
+        name="UE3 NLA - Modular Anim Support",
+        description="If disabled (vanilla), NLA is exported on a per-strip basis. "
+                    "If enabled, NLA is exported on a per-track basis, so multiple animations on the same row "
+                    "will be exported, in full, as one single animation. Plus, additive animations placed above "
+                    "will be merged down - rather than being individually exported",
+        default=DEF_EXPORT_NLA_MODULAR_ANIM_SUPPORT,
+    )
+    UE3_nla_force_export: BoolProperty(
+        name="UE3 NLA - Force Export",
+        description="If disabled (vanilla), NLA tracks which are disabled are skipped during export. "
+                    "If enabled, all NLA tracks will ALWAYS be exported",
+        default=DEF_EXPORT_NLA_FORCE_EXPORT,
+    )
+    UE3_nla_only_animate_owner: BoolProperty(
+        name="UE3 NLA - Only Animate Owner",
+        description="If disabled (vanilla), NLA animations will bake the entire exported scene - even unrelated objects, which is unnecessary. "
+                    "If enabled, these animations will only track their owner object",
+        default=DEF_EXPORT_NLA_ONLY_ANIMATE_OWNER,
+    )
     UE3_rest_default_pose: BoolProperty(
         name="UE3 - Rest Default Pose",
         description="If enabled, this causes the default pose in the FBX file to use the Rest Pose of the armature. "
@@ -624,27 +652,7 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
     UE3_remove_anim_object_prefix: BoolProperty(
         name="UE3 - Remove prefix from anim names",
         description="If enabled, this removes the object prefix from action names, which is normally added by the vanilla FBX add-on",
-        default=True,
-    )
-    UE3_nla_only_animate_owner: BoolProperty(
-        name="UE3 NLA - Only Animate Owner",
-        description="If disabled (vanilla), NLA animations will bake the entire exported scene - even unrelated objects, which is unnecessary. "
-                    "If enabled, these animations will only track their owner object",
-        default=True,
-    )
-    UE3_nla_modular_anim_support: BoolProperty(
-        name="UE3 NLA - Modular Anim Support",
-        description="If disabled (vanilla), NLA is exported on a per-strip basis. "
-                    "If enabled, NLA is exported on a per-track basis, so multiple animations on the same row "
-                    "will be exported, in full, as one single animation. Plus, additive animations placed above "
-                    "will be merged down - rather than being individually exported",
-        default=False,
-    )
-    UE3_nla_force_export: BoolProperty(
-        name="UE3 NLA - Force Export",
-        description="If disabled (vanilla), NLA tracks which are disabled are skipped during export. "
-                    "If enabled, all NLA tracks will ALWAYS be exported",
-        default=False,
+        default=DEF_EXPORT_REMOVE_ANIM_OBJECT_PREFIX,
     )
     # UnDrew Add End
     # UnDrew Add Start : Batch export Anims.
@@ -847,11 +855,11 @@ def export_panel_animation(layout, operator):
         # UnDrew Add Start : Extended animation export properties.
         sublayout = body.column()
         sublayout.use_property_split = False  # These property names are pretty long, let's use all available space.
-        sublayout.prop(operator, "UE3_rest_default_pose")
-        sublayout.prop(operator, "UE3_remove_anim_object_prefix")
-        sublayout.prop(operator, "UE3_nla_only_animate_owner")
         sublayout.prop(operator, "UE3_nla_modular_anim_support")
         sublayout.prop(operator, "UE3_nla_force_export")
+        sublayout.prop(operator, "UE3_nla_only_animate_owner")
+        sublayout.prop(operator, "UE3_rest_default_pose")
+        sublayout.prop(operator, "UE3_remove_anim_object_prefix")
         # UnDrew Add End
 
 
