@@ -4053,7 +4053,7 @@ def save(operator, context,
         kwargs_mod["context_objects"] = ctx_objects
 
         depsgraph = context.evaluated_depsgraph_get()
-        ret = UE3_batch_nla_save_wrapper(operator, context.scene, depsgraph, filepath, **kwargs_mod)   # UnDrew Edit : Batch export NLA (save_single -> UE3_batch_nla_save_wrapper)
+        ret = save_single(operator, context.scene, depsgraph, filepath, **kwargs_mod)
     else:
         # XXX We need a way to generate a depsgraph for inactive view_layers first...
         # XXX Also, what to do in case of batch-exporting scenes, when there is more than one view layer?
@@ -4139,7 +4139,7 @@ def save(operator, context,
             kwargs_batch = kwargs.copy()
             kwargs_batch["context_objects"] = getattr(data, data_obj_propname)
 
-            UE3_batch_nla_save_wrapper(operator, scene, scene.view_layers[0].depsgraph, filepath, **kwargs_batch)  # UnDrew Edit : Batch export NLA (save_single -> UE3_batch_nla_save_wrapper)
+            save_single(operator, scene, scene.view_layers[0].depsgraph, filepath, **kwargs_batch)
 
             if batch_mode in {'COLLECTION', 'SCENE_COLLECTION', 'ACTIVE_SCENE_COLLECTION'}:
                 # Remove temp collection scene.
@@ -4151,158 +4151,6 @@ def save(operator, context,
             bpy.ops.object.mode_set(mode=org_mode)
 
     return ret
-
-# UnDrew Add Start : Batch export NLA
-
-from collections import namedtuple
-ObjectStrips = namedtuple("ObjectActiveStrips", ("object", "strips"))
-
-# A wrapper meant to replace any calls to save_single, so NLA batch exporting is compatible with any other built-in batching.
-# This also saves me the headache of trying to shoehorn a new item in the existing Batch Mode list. I wanna try to keep my
-# additions reasonably self-contained.
-def UE3_batch_nla_save_wrapper(operator, scene, depsgraph, filepath="", **kwargs):
-
-    # NLA Batching not enabled? Just call save_single
-    # TODO: DEPRECATED CODE! REMOVE ME PLS!
-    if True or not kwargs["bake_anim"] or not kwargs["bake_anim_use_nla_strips"] or not kwargs["UE3_batch_anims"]:
-        return save_single(operator, scene, depsgraph, filepath, **kwargs)
-
-    # If we should still save a main file, let's do that now.
-    if not kwargs["UE3_batch_skip_main"]:
-        print("[NLA BATCHING] Exporting main file:")
-        # XXX: If both actions and NLA are disabled, the vanilla addon attempts to export a global AnimStack.
-        #      Disabling NLA *here* would trigger that too (if actions were disabled as well), so if that
-        #      situation comes up, I'll just disable animation altogether. Hacky, but works.
-        kwargs_mod = kwargs.copy()
-        if kwargs_mod["bake_anim_use_all_actions"]:
-            kwargs_mod["bake_anim_use_nla_strips"] = False
-        else:
-            kwargs_mod["bake_anim"] = False
-        save_single(operator, scene, depsgraph, filepath, **kwargs_mod)
-
-    # Some caching.
-    UE3_batch_nla_all_mode = kwargs["UE3_batch_nla_all_mode"]
-    UE3_batch_nla_obj_subfolder = kwargs["UE3_batch_nla_obj_subfolder"]
-    UE3_batch_nla_only_owner_object = kwargs["UE3_batch_object_filter"]
-
-    print("[NLA BATCHING] Gathering NLA strips:")
-
-    # Next, go through each object queued to export, and figure out which ones have active NLA strips, collecting them into object-strips pairs.
-    # Also, remember the original states. Not changing them yet though, since there's no guarantee that we'll be exporting any files yet.
-    """
-    - pairs: Object-strips pairs, where each strip will be exported as its own file.
-    - unmute_strips: Strips the user left UN-muted, but should be muted while exporting. (each strip gets unmuted separately during export)
-    When a track is in solo mode, aka Starred (and 'ALL Mode' is off):
-        - unmute_tracks: Tracks that should be muted during export, so the rest of the script gets the memo that they should NOT be active!
-                         (because for some reason the vanilla script doesn't check is_solo, lol)
-    When in 'ALL Mode':
-        - mute_tracks: Tracks the user muted, but shouldn't be while exporting.
-        - solo_tracks: Tracks the user "starred", but shouldn't be while exporting. (each object can have a solo track, hence it's a list)
-    """
-    pairs = []
-    number_of_strips = 0
-    unmute_strips = []
-    unmute_tracks = []
-    mute_tracks = []
-    solo_tracks = []
-
-    object_types = kwargs["object_types"]
-    strips = []
-    for object in kwargs["context_objects"]:
-        if object.type not in object_types:
-            continue    # let's respect the selected object types
-        if not object.animation_data or not object.animation_data.nla_tracks:
-            continue
-        make_pair = False
-        # Let's first see if a track is in solo mode (starred)
-        solo_track = None
-        for track in object.animation_data.nla_tracks:
-            if track.is_solo:
-                solo_track = track
-                if UE3_batch_nla_all_mode:
-                    # It's solo, but shouldn't be.
-                    solo_tracks.append(solo_track)
-                break
-        # Then go through the tracks again, now that we know solo_track
-        for track in object.animation_data.nla_tracks:
-            if track.mute:
-                if UE3_batch_nla_all_mode:
-                    mute_tracks.append(track)
-                else:
-                    continue
-            if not UE3_batch_nla_all_mode and solo_track and track is not solo_track:
-                # It's not muted, but needs to be.
-                # (currently the vanilla fbx addon doesn't care about solo tracks, it only checks mute)
-                unmute_tracks.append(track)
-                continue
-            for strip in track.strips:
-                if not UE3_batch_nla_all_mode and strip.mute:
-                    continue
-                make_pair = True
-                strips.append(strip)
-                if not strip.mute:
-                    unmute_strips.append(strip)
-        if make_pair:
-            number_of_strips += len(strips)
-            pairs.append(ObjectStrips(object, tuple(strips)))
-            strips.clear()
-
-    # No valid pairs? Nothing was changed? Then don't do anything else.
-    if not number_of_strips:
-        print("[NLA BATCHING] No active NLA strips, cancelling...")
-        return {'FINISHED'}
-
-    print("[NLA BATCHING] Exporting %i files from %s:" % (number_of_strips, "1 object" if len(pairs) == 1 else "%i objects" % len(pairs)))
-    start_time = time.process_time()
-
-    # Figure out the root export path, and add the subpath. Use os.path.abspath to cleanup, if the subpath ended up being empty
-    # (so future parts of the code don't have to deal with duped slashes. Those DO influence how they're parsed by os.path functions)
-    root_path = os.path.abspath(os.path.join(os.path.dirname(filepath), kwargs["UE3_batch_subpath"]))
-    if not UE3_batch_nla_obj_subfolder and not os.path.exists(root_path):
-        os.makedirs(root_path)
-
-    # Time to export! Let's get the tracks and strips in the states that we need them in.
-    for strip in unmute_strips:
-        strip.mute = True
-    for track in unmute_tracks:
-        track.mute = True
-    for track in mute_tracks:
-        track.mute = False
-    for track in solo_tracks:
-        track.is_solo = False
-
-    # Now go through each object-strips pair, and export a file for each strip.
-    kwargs_mod = kwargs.copy()
-    kwargs_mod["bake_anim_use_all_actions"] = False # don't wanna end up with all actions for every file, now do we?
-    for pair in pairs:
-        object_path = root_path
-        if UE3_batch_nla_obj_subfolder:
-            object_path = os.path.join(object_path, bpy.path.clean_name(pair.object.name))
-            if not os.path.exists(object_path):
-                os.makedirs(object_path)
-        if UE3_batch_nla_only_owner_object:
-            kwargs_mod["context_objects"] = (pair.object,)  # a tuple (disgusting syntax tho?)
-        
-        for strip in pair.strips:
-            strip.mute = False
-            save_single(operator, scene, depsgraph, os.path.join(object_path, bpy.path.clean_name(strip.name) + ".fbx"), **kwargs_mod)
-            strip.mute = True
-    
-    # Let's get everything back in the original state.
-    for strip in unmute_strips:
-        strip.mute = False
-    for track in unmute_tracks:
-        track.mute = False
-    for track in mute_tracks:
-        track.mute = True
-    for track in solo_tracks:
-        track.is_solo = True
-    
-    # And voila
-    print("[NLA BATCHING] Successfully exported %i files from %s, in %.4f sec." % (number_of_strips, "1 object" if len(pairs) == 1 else "%i objects" % len(pairs), time.process_time() - start_time))
-    return {'FINISHED'}
-
-# UnDrew Add End
 
 
 # UnDrew Add Start : Gather and mark empty chains, so ( fbx_utils.ObjectWrapper.fbx_object_matrix ) can properly bake their transforms.
