@@ -79,8 +79,10 @@ DEF_EXPORT_ADD_LEAF_BONES = False
 
 @orientation_helper(axis_forward='-Z', axis_up='Y')
 class ImportFBX(bpy.types.Operator, ImportHelper):
+    # UnDrew Edit Start : Avoid conflicts + custom tooltip.
     """Load a FBX file, using the patched importer"""
-    bl_idname = "import_scene_patch_ahit.fbx"  # UnDrew Edit : Avoid conflicts.
+    bl_idname = "import_scene_patch_ahit.fbx"
+    # UnDrew Edit End
     bl_label = "Import FBX"
     bl_options = {'UNDO', 'PRESET'}
 
@@ -365,8 +367,10 @@ def import_panel_armature(layout, operator):
 
 @orientation_helper(axis_forward='-Z', axis_up='Y')
 class ExportFBX(bpy.types.Operator, ExportHelper):
+    # UnDrew Edit Start : Avoid conflicts + custom tooltip.
     """Write a FBX file, using the patched exporter"""
-    bl_idname = "export_scene_patch_ahit.fbx"  # UnDrew Edit : Avoid conflicts.
+    bl_idname = "export_scene_patch_ahit.fbx"
+    # UnDrew Edit End
     bl_label = "Export FBX"
     bl_options = {'UNDO', 'PRESET'}
 
