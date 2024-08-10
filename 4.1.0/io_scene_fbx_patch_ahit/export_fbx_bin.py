@@ -2543,7 +2543,7 @@ def fbx_animations(scene_data):
             for strip, ob_obj in strips:
                 strip.mute = False
                 add_anim(animations, animated,
-                        fbx_animations_do(scene_data, strip, strip.frame_start, strip.frame_end, True,
+                         fbx_animations_do(scene_data, strip, strip.frame_start, strip.frame_end, True,
                                           objects=({ob_obj} if scene_data.settings.UE3_nla_only_animate_owner else None), force_keep=True))
                 strip.mute = True
                 scene.frame_set(scene.frame_current, subframe=0.0)
