@@ -1069,7 +1069,9 @@ def blen_read_animations_action_item(action, item, cnodes, fps, anim_offset, glo
         blen_store_keyframes_multi(combined_fbx_times, zip(blen_curves, channel_values), anim_offset, fps, fbx_ktime)
 
 
+# UnDrew Edit Start : Pass the FPS fix setting.
 def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_offset, UE3_custom_fps_fix, global_scale, fbx_ktime):
+# UnDrew Edit End
     """
     Recreate an action per stack/layer/object combinations.
     Only the first found action is linked to objects, more complex setups are not handled,
@@ -3887,8 +3889,10 @@ def load(operator, context, filepath="",
                     curvenodes[acn_uuid][ac_uuid] = (fbx_acitem, channel)
 
             # And now that we have sorted all this, apply animations!
+            # UnDrew Edit Start : Pass the FPS fix setting.
             blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, settings.anim_offset, UE3_custom_fps_fix, global_scale,
                                  fbx_ktime)
+            # UnDrew Edit End
 
         _()
         del _

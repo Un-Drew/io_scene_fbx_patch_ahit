@@ -882,12 +882,13 @@ def export_panel_UE3_batch_anims(layout, operator):
 # UnDrew Add End
 
 
-# UnDrew Edit Start : Ranames. For clarity, and to avoid conflicts.
+# UnDrew Edit Start : Avoid conflicts.
 class IO_FH_fbx_patch_ahit(bpy.types.FileHandler):
-    bl_idname = "IO_FH_fbx_patch_ahit"
-    bl_label = "FBX - AHiT patch"
-    bl_import_operator = "import_scene_patch_ahit.fbx"
-    bl_export_operator = "export_scene_patch_ahit.fbx"
+# UnDrew Edit End
+    bl_idname = "IO_FH_fbx_patch_ahit"  # UnDrew Edit : Avoid conflicts.
+    bl_label = "FBX - AHiT patch"  # UnDrew Edit : Clarity.
+    bl_import_operator = "import_scene_patch_ahit.fbx"  # UnDrew Edit : Avoid conflicts.
+    bl_export_operator = "export_scene_patch_ahit.fbx"  # UnDrew Edit : Avoid conflicts.
     bl_file_extensions = ".fbx"
 
     @classmethod
@@ -896,17 +897,19 @@ class IO_FH_fbx_patch_ahit(bpy.types.FileHandler):
 
 
 def menu_func_import(self, context):
-    self.layout.operator(ImportFBX.bl_idname, text="FBX - AHiT patch (.fbx)")
+    self.layout.operator(ImportFBX.bl_idname, text="FBX - AHiT patch (.fbx)")  # UnDrew Edit : Clarity.
 
 
 def menu_func_export(self, context):
-    self.layout.operator(ExportFBX.bl_idname, text="FBX - AHiT patch (.fbx)")
+    self.layout.operator(ExportFBX.bl_idname, text="FBX - AHiT patch (.fbx)")  # UnDrew Edit : Clarity.
 
 
 classes = (
     ImportFBX,
     ExportFBX,
+    # UnDrew Edit Start : Avoid conflicts.
     IO_FH_fbx_patch_ahit,
+    # UnDrew Edit End
 )
 # UnDrew Edit End
 

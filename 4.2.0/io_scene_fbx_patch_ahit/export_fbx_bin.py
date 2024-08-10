@@ -3227,7 +3227,7 @@ def fbx_header_elements(root, scene_data, time=None):
     time is expected to be a datetime.datetime object, or None (using now() in this case).
     """
     app_vendor = "Blender Foundation"
-    app_name = "Blender (stable FBX IO - AHiT patch)"
+    app_name = "Blender (stable FBX IO - AHiT patch)"  # UnDrew Edit : Rename.
     app_ver = bpy.app.version_string
 
     # UnDrew Edit Start : Seemingly can't use bl_info for extensions. Read version from TOML directly... I guess.
