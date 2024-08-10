@@ -20,6 +20,12 @@
 			"type": "shell",
 			"command": "${config:io_scene_fbx_patch_ahit.blenderPath} --command extension build --output-dir ../",
 			"group": "build"
+		},
+		{
+			"label": "Build extension - Legacy (pre-4.2)",
+			"type": "shell",
+			"command": "PowerShell -ExecutionPolicy RemoteSigned -File ${workspaceFolder}${/}BuildExtension_Legacy.ps1 ${fileDirname}${/}..",
+			"group": "build"
 		}
 	]
 }
