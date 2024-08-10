@@ -81,7 +81,7 @@ DEF_EXPORT_ADD_LEAF_BONES = False
 class ImportFBX(bpy.types.Operator, ImportHelper):
     # UnDrew Edit Start : Avoid conflicts + custom tooltip.
     """Load a FBX file, using the patched importer"""
-    bl_idname = "import_scene_patch_ahit.fbx"
+    bl_idname = "import_scene.fbx_patch_ahit"
     # UnDrew Edit End
     bl_label = "Import FBX"
     bl_options = {'UNDO', 'PRESET'}
@@ -369,7 +369,7 @@ def import_panel_armature(layout, operator):
 class ExportFBX(bpy.types.Operator, ExportHelper):
     # UnDrew Edit Start : Avoid conflicts + custom tooltip.
     """Write a FBX file, using the patched exporter"""
-    bl_idname = "export_scene_patch_ahit.fbx"
+    bl_idname = "export_scene.fbx_patch_ahit"
     # UnDrew Edit End
     bl_label = "Export FBX"
     bl_options = {'UNDO', 'PRESET'}
@@ -887,8 +887,8 @@ class IO_FH_fbx_patch_ahit(bpy.types.FileHandler):
 # UnDrew Edit End
     bl_idname = "IO_FH_fbx_patch_ahit"  # UnDrew Edit : Avoid conflicts.
     bl_label = "FBX - AHiT patch"  # UnDrew Edit : Clarity.
-    bl_import_operator = "import_scene_patch_ahit.fbx"  # UnDrew Edit : Avoid conflicts.
-    bl_export_operator = "export_scene_patch_ahit.fbx"  # UnDrew Edit : Avoid conflicts.
+    bl_import_operator = "import_scene.fbx_patch_ahit"  # UnDrew Edit : Avoid conflicts.
+    bl_export_operator = "export_scene.fbx_patch_ahit"  # UnDrew Edit : Avoid conflicts.
     bl_file_extensions = ".fbx"
 
     @classmethod
