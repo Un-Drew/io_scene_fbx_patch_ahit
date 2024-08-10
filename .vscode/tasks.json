@@ -18,7 +18,7 @@
 		{
 			"label": "Build extension",
 			"type": "shell",
-			"command": "${config:io_scene_fbx_patch_ahit.blenderPath} --command extension build",
+			"command": "${config:io_scene_fbx_patch_ahit.blenderPath} --command extension build --output-dir ../",
 			"group": "build"
 		}
 	]
