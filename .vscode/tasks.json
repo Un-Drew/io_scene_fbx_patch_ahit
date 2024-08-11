@@ -22,9 +22,9 @@
 			"group": "build"
 		},
 		{
-			"label": "Build extension - Legacy (pre-4.2)",
+			"label": "Build extension (pre-4.2)",
 			"type": "shell",
-			"command": "PowerShell -ExecutionPolicy RemoteSigned -File ${workspaceFolder}${/}BuildExtension_Legacy.ps1 ${fileDirname}${/}..",
+			"command": "PowerShell -ExecutionPolicy RemoteSigned -File ${workspaceFolder}${/}BuildAddon_Pre-4.2.ps1 ${fileDirname}${/}..",
 			"group": "build"
 		}
 	]
