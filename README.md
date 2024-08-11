@@ -24,5 +24,5 @@ This patch can be downloaded from the [Releases](https://github.com/Un-Drew/io_s
 * [Install instructions](https://github.com/Un-Drew/io_scene_fbx_patch_ahit/wiki/Install-instructions)
 * [Full list of fixes & additions](https://github.com/Un-Drew/io_scene_fbx_patch_ahit/wiki/Fixes-&-Additions)
 * [Changelog](https://github.com/Un-Drew/io_scene_fbx_patch_ahit/wiki/Changelog)
-* [Issues](https://github.com/Un-Drew/io_scene_fbx_patch_ahit/issues) - Any issues you may find with the patch can be reported here.
+* [Issues and Requests](https://github.com/Un-Drew/io_scene_fbx_patch_ahit/issues) - Any issues you may find with the patch can be reported here. This can also be used to make feature requests.
 * [Source code of the original add-on](https://github.com/blender/blender/tree/main/scripts/addons_core/io_scene_fbx)
