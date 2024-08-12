@@ -83,7 +83,7 @@ class ImportFBX(bpy.types.Operator, ImportHelper):
     """Load a FBX file, using the patched importer"""
     bl_idname = "import_scene.fbx_patch_ahit"
     # UnDrew Edit End
-    bl_label = "Import FBX"
+    bl_label = "Import FBX - AHiT"  # UnDrew Edit : Clarity, especially with drag-n-drop support.
     bl_options = {'UNDO', 'PRESET'}
 
     directory: StringProperty()
@@ -371,7 +371,7 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
     """Write a FBX file, using the patched exporter"""
     bl_idname = "export_scene.fbx_patch_ahit"
     # UnDrew Edit End
-    bl_label = "Export FBX"
+    bl_label = "Export FBX - AHiT"  # UnDrew Edit : Clarity.
     bl_options = {'UNDO', 'PRESET'}
 
     filename_ext = ".fbx"
