@@ -1,0 +1,38 @@
+schema_version = "1.0.0"
+
+id = "io_scene_fbx_patch_ahit"
+
+version = "4.3.0"
+
+name = "FBX format - AHiT patch"
+tagline = "Modified FBX add-on; fixes some compatibility issues with AHiT"
+maintainer = "Original add-on by: Campbell Barton, Bastien Montagne, Jens Restemeier, @Mysteryem. Modified by: UnDrew"
+type = "add-on"
+
+website = "https://github.com/Un-Drew/io_scene_fbx_patch_ahit"
+
+# Optional list defined by Blender and server, see:
+# https://docs.blender.org/manual/en/dev/advanced/extensions/tags.html
+tags = ["Game Engine", "Import-Export"]
+
+blender_version_min = "4.2.0"
+# blender_version_max = ?????????????????
+
+# License conforming to https://spdx.org/licenses/ (use "SPDX: prefix)
+# https://docs.blender.org/manual/en/dev/advanced/extensions/licenses.html
+# UnDrew Note: Using GPL 2.0 or later, since that's the original add-on's license.
+license = [
+  "SPDX:GPL-2.0-or-later",
+]
+
+[permissions]
+files = "Import/export FBX from/to disk"
+
+# Optional: build settings.
+# https://docs.blender.org/manual/en/dev/advanced/extensions/command_line_arguments.html#command-line-args-extension-build
+# [build]
+# paths_exclude_pattern = [
+#   "__pycache__/",
+#   "/.git/",
+#   "/*.zip",
+# ]
