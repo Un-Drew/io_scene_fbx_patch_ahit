@@ -911,7 +911,7 @@ def blen_read_animations_action_item(action, item, cnodes, fps, anim_offset, glo
     'Bake' loc/rot/scale into the action,
     taking any pre_ and post_ matrix into account to transform from fbx into blender space.
     """
-    from bpy.types import Object, PoseBone, ShapeKey, Material, Camera
+    from bpy.types import ShapeKey, Material, Camera
 
     fbx_curves: dict[bytes, dict[int, FBXElem]] = {}
     for curves, fbxprop in cnodes.values():
@@ -1800,11 +1800,6 @@ def blen_read_geom_layer_normal(fbx_obj, mesh, xform=None):
     return False
 
 
-def normalize_vecs(vectors):
-    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
-    np.divide(vectors, norms, out=vectors, where=norms != 0)
-
-
 def blen_read_geom(fbx_tmpl, fbx_obj, settings):
     # Vertices are in object space, but we are post-multiplying all transforms with the inverse of the
     # global matrix, so we need to apply the global matrix to the vertices to get the correct result.
@@ -1934,10 +1929,6 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
         bl_nors_dtype = np.single
         clnors = np.empty(len(mesh.loops) * 3, dtype=bl_nors_dtype)
         mesh.attributes["temp_custom_normals"].data.foreach_get("vector", clnors)
-
-        clnors = clnors.reshape(len(mesh.loops), 3)
-        normalize_vecs(clnors)
-        clnors = clnors.reshape(len(mesh.loops) * 3)
 
         # Iterating clnors into a nested tuple first is faster than passing clnors.reshape(-1, 3) directly into
         # normals_split_custom_set. We use clnors.data since it is a memoryview, which is faster to iterate than clnors.
