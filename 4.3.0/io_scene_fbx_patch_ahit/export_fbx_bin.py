@@ -3691,7 +3691,7 @@ def save_single(operator, scene, depsgraph, filepath="",
             if type(scene_data.animations) is list:
                 scene_data.animations.clear()
 
-            write_start = time.process_time()
+            write_start = time.time()
 
             with encode_bin.FBXElem.enable_multithreading_cm():
                 root = elem_empty(None, b"")
@@ -3705,7 +3705,7 @@ def save_single(operator, scene, depsgraph, filepath="",
 
             encode_bin.write(filepath, root, FBX_VERSION)
 
-            print('Spent %.4f sec. writing %r' % (time.process_time() - write_start, filepath))
+            print('Spent %.4f sec. writing %r' % (time.time() - write_start, filepath))
 
             # Restore them (leaving things as we found them).
             if type(scene_data.animations) is list:
@@ -3860,7 +3860,7 @@ def save_single(operator, scene, depsgraph, filepath="",
             # anim[3] is the animation's name. Decode to a string, since it seems ( bpy.path.clean_name ) has an oversight with bytes.
             output_path = os.path.join(root_path, bpy.path.clean_name(anim[3].decode(errors='replace')) + ".fbx")
 
-            write_start = time.process_time()
+            write_start = time.time()
 
             with encode_bin.FBXElem.enable_multithreading_cm():
                 root = elem_empty(None, b"")
@@ -3874,7 +3874,7 @@ def save_single(operator, scene, depsgraph, filepath="",
 
             encode_bin.write(output_path, root, FBX_VERSION)
 
-            print('Spent %.4f sec. writing %r' % (time.process_time() - write_start, output_path))
+            print('Spent %.4f sec. writing %r' % (time.time() - write_start, output_path))
 
             """ Debug stuff...
             
