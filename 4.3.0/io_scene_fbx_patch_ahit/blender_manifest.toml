@@ -15,7 +15,7 @@ website = "https://github.com/Un-Drew/io_scene_fbx_patch_ahit"
 # https://docs.blender.org/manual/en/dev/advanced/extensions/tags.html
 tags = ["Game Engine", "Import-Export"]
 
-blender_version_min = "4.2.0"
+blender_version_min = "4.3.0"
 # blender_version_max = ?????????????????
 
 # License conforming to https://spdx.org/licenses/ (use "SPDX: prefix)
