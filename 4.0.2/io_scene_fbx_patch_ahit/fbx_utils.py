@@ -1742,7 +1742,7 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
                     pbone.bone.matrix_local,
                     parent_matrix=pbone.parent.matrix,
                     parent_matrix_local=pbone.parent.bone.matrix_local,
-                    invert=True  # Invert means Pose to Local, not the default with is Local to Pose.
+                    invert=True  # Invert means Pose to Local, not the default which is Local to Pose.
                 )
 
                 # Restore any changed settings.
