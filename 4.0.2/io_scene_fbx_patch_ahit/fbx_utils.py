@@ -1718,14 +1718,40 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
             # UnDrew Add Start : Deliberate support for other scale inheritance modes.
             if par and self.inherit_type != 1:  # != RSrs
                 pbone = self._ref.pose.bones[self.bdata.name]
-                # Invert: Convert Pose to Local! Where Pose = "Global Armature Space" (I think!), Local = "Local Rest Space"
-                return self.matrix_rest_local @ self.bdata.convert_local_to_pose(
-                    pbone.matrix,
+                saved_pose_matrix = pbone.matrix.copy()  # Copy doesn't seem necessary, but better safe than sorry!
+
+                # So, for this case, I'm using a dedicated function for space conversions, which does it properly depending on
+                # the current bone settings. This function, unfortunately, works TOO WELL, because it also accounts for when
+                # the Local Location or Inherit Rotation bone settings are disabled, which isn't really desired here.
+                # Therefore, temporarily set those to True while converting.
+                # This seemingly has a bit of a cost (some update it runs?), but it isn't too dramatic, even in stress-tests.
+                #
+                # P.S.: Okay, so I probably coooouuuld figure how to mathematically account for those settings myself without
+                # having to toggle them, but I honestly can't be bothered. And tbh, this is more maintainable.
+                no_local_location = not self.bdata.use_local_location
+                no_inherit_rotation = not self.bdata.use_inherit_rotation
+                if no_local_location:
+                    self.bdata.use_local_location = True
+                if no_inherit_rotation:
+                    self.bdata.use_inherit_rotation = True
+
+                # Now convert Pose (in "global" armature space) to Local (in rest-relative space), and then
+                # convert THAT to parent-relative. Very confusing!
+                r = self.matrix_rest_local @ self.bdata.convert_local_to_pose(
+                    saved_pose_matrix,
                     pbone.bone.matrix_local,
                     parent_matrix=pbone.parent.matrix,
                     parent_matrix_local=pbone.parent.bone.matrix_local,
-                    invert=True
+                    invert=True  # Invert means Pose to Local, not the default which is Local to Pose.
                 )
+
+                # Restore any changed settings.
+                if no_local_location:
+                    self.bdata.use_local_location = False
+                if no_inherit_rotation:
+                    self.bdata.use_inherit_rotation = False
+
+                return r
             # UnDrew Add End
             par_mat_inv = self._ref.pose.bones[par.name].matrix.inverted_safe() if par else Matrix()
             return par_mat_inv @ self._ref.pose.bones[self.bdata.name].matrix
