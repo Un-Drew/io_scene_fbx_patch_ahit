@@ -52,6 +52,8 @@ from bpy_extras.io_utils import (
 DEF_IMPORT_ROOT_AS_BONE = True
 # For vanilla behaviour, change this one to False
 DEF_IMPORT_SCALE_INHERITANCE = True
+# For vanilla behaviour, change this one to True
+DEF_IMPORT_CONNECT_CHILDREN = False
 # For vanilla behaviour, change this one to 'ALWAYS'
 DEF_IMPORT_FPS_RULE = 'IF_FOUND'
 # For vanilla behaviour, change this one to False
@@ -220,6 +222,15 @@ class ImportFBX(bpy.types.Operator, ImportHelper):
         default=DEF_IMPORT_SCALE_INHERITANCE,
     )
     # UnDrew Add End
+    # UnDrew Add Start : Option to toggle whether to try connecting bones on import.
+    UE3_connect_children: BoolProperty(
+        name="UE3 - Connect Children",
+        description="If disabled, don't attempt to connect bones at all. "
+                    "If enabled (vanilla), connect child bones if their position matches the parent's tail "
+                    "(Note this can break translation animation sometimes)",
+        default=DEF_IMPORT_CONNECT_CHILDREN,
+    )
+    # UnDrew Add End
     force_connect_children: BoolProperty(
         name="Force Connect Children",
         description="Force connection of children bones to their parent, even if their computed head/tail "
@@ -351,6 +362,9 @@ def import_panel_armature(layout, operator):
     header.label(text="Armature")
     if body:
         body.prop(operator, "ignore_leaf_bones")
+        # UnDrew Add Start : Option to toggle whether to try connecting bones on import.
+        body.prop(operator, "UE3_connect_children")
+        # UnDrew Add End
         body.prop(operator, "force_connect_children"),
         body.prop(operator, "automatic_bone_orientation"),
         sub = body.column()

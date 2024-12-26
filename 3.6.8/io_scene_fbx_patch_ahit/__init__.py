@@ -49,6 +49,8 @@ from bpy_extras.io_utils import (
 DEF_IMPORT_ROOT_AS_BONE = True
 # For vanilla behaviour, change this one to False
 DEF_IMPORT_SCALE_INHERITANCE = True
+# For vanilla behaviour, change this one to True
+DEF_IMPORT_CONNECT_CHILDREN = False
 # For vanilla behaviour, change this one to 'ALWAYS'
 DEF_IMPORT_FPS_RULE = 'IF_FOUND'
 # For vanilla behaviour, change this one to False
@@ -215,6 +217,15 @@ class ImportFBX(bpy.types.Operator, ImportHelper):
             name="UE3 - Import Scale Inheritance",
             description="If enabled, the per-bone Inherit Scale property is correctly imported (AHiT always uses 'Aligned')",
             default=DEF_IMPORT_SCALE_INHERITANCE,
+            )
+    # UnDrew Add End
+    # UnDrew Add Start : Option to toggle whether to try connecting bones on import.
+    UE3_connect_children: BoolProperty(
+            name="UE3 - Connect Children",
+            description="If disabled, don't attempt to connect bones at all. "
+                        "If enabled (vanilla), connect child bones if their position matches the parent's tail "
+                        "(Note this can break translation animation sometimes)",
+            default=DEF_IMPORT_CONNECT_CHILDREN,
             )
     # UnDrew Add End
     force_connect_children: BoolProperty(
@@ -443,6 +454,9 @@ class FBX_PT_import_armature_ahit_patch(bpy.types.Panel):
         operator = sfile.active_operator
 
         layout.prop(operator, "ignore_leaf_bones")
+        # UnDrew Add Start : Option to toggle whether to try connecting bones on import.
+        layout.prop(operator, "UE3_connect_children")
+        # UnDrew Add End
         layout.prop(operator, "force_connect_children"),
         layout.prop(operator, "automatic_bone_orientation"),
         sub = layout.column()
