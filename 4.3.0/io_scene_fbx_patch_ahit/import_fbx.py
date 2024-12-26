@@ -2640,6 +2640,11 @@ class FbxImportHelperNode:
                 child_bone.parent = par_bone
                 child_head = child_bone.head
 
+            # UnDrew Add Start : Don't do any of this if the custom setting is disabled.
+            if not settings.UE3_connect_children:
+                return
+            # UnDrew Add End
+
             if similar_values_iter(par_bone.tail, child_head):
                 if child_bone is not None:
                     child_bone.use_connect = True
@@ -2660,6 +2665,11 @@ class FbxImportHelperNode:
             connect_ctx[1] = connected
 
         def child_connect_finalize(par_bone, connect_ctx):
+            # UnDrew Add Start : Don't do any of this if the custom setting is disabled.
+            if not settings.UE3_connect_children:
+                return
+            # UnDrew Add End
+
             force_connect_children, connected = connect_ctx
             # Do nothing if force connection is not enabled!
             if force_connect_children and connected is not None and connected is not ...:
@@ -3082,6 +3092,7 @@ def load(operator, context, filepath="",
          UE3_import_scale_inheritance=True,
          UE3_fps_import_rule='IF_FOUND',   # doesn't need to be passed in the settings tuple, it's only used here.
          UE3_custom_fps_fix=True,   # ...neither does this.
+         UE3_connect_children=False,
          # UnDrew Add End
          force_connect_children=False,
          automatic_bone_orientation=False,
@@ -3238,7 +3249,7 @@ def load(operator, context, filepath="",
         nodal_material_wrap_map, image_cache,
         ignore_leaf_bones, force_connect_children, automatic_bone_orientation, bone_correction_matrix,
         # UnDrew Add Start : New import settings.
-        UE3_import_root_as_bone, UE3_import_scale_inheritance,
+        UE3_import_root_as_bone, UE3_import_scale_inheritance, UE3_connect_children,
         # UnDrew Add End
         use_prepost_rot, colors_type,
     )

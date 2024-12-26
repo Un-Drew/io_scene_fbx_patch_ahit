@@ -1727,7 +1727,7 @@ FBXImportSettings = namedtuple("FBXImportSettings", (
     "nodal_material_wrap_map", "image_cache",
     "ignore_leaf_bones", "force_connect_children", "automatic_bone_orientation", "bone_correction_matrix",
     # UnDrew Add Start : New settings that need to be passed to the importer's "settings" var.
-    "UE3_import_root_as_bone", "UE3_import_scale_inheritance",
+    "UE3_import_root_as_bone", "UE3_import_scale_inheritance", "UE3_connect_children",
     # UnDrew Add End
     "use_prepost_rot", "colors_type",
 ))
