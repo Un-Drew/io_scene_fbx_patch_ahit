@@ -1070,7 +1070,7 @@ def blen_read_animations_action_item(action, item, cnodes, fps, anim_offset, glo
 
 
 # UnDrew Edit Start : Pass the FPS fix setting.
-def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_offset, UE3_custom_fps_fix, global_scale, fbx_ktime):
+def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_offset, UE3_custom_fps_fix, UE3_set_action_id_root, global_scale, fbx_ktime):
 # UnDrew Edit End
     """
     Recreate an action per stack/layer/object combinations.
@@ -1111,6 +1111,10 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
                         action_name = "|".join((id_data.name, stack_name, layer_name))
                     actions[key] = action = bpy.data.actions.new(action_name)
                     action.use_fake_user = True
+                    # UnDrew Add Start : Set the proper id_root on the action, so it isn't possible to irreparably lock an action to the wrong type.
+                    if UE3_set_action_id_root:
+                        action.id_root = id_data.id_type
+                    # UnDrew Add End
                 # If none yet assigned, assign this action to id_data.
                 if not id_data.animation_data:
                     id_data.animation_data_create()
@@ -3092,6 +3096,7 @@ def load(operator, context, filepath="",
          UE3_import_scale_inheritance=True,
          UE3_fps_import_rule='IF_FOUND',   # doesn't need to be passed in the settings tuple, it's only used here.
          UE3_custom_fps_fix=True,   # ...neither does this.
+         UE3_set_action_id_root=True,   # ...neither does this.
          UE3_connect_children=False,
          # UnDrew Add End
          force_connect_children=False,
@@ -3891,8 +3896,8 @@ def load(operator, context, filepath="",
                     curvenodes[acn_uuid][ac_uuid] = (fbx_acitem, channel)
 
             # And now that we have sorted all this, apply animations!
-            # UnDrew Edit Start : Pass the FPS fix setting.
-            blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, settings.anim_offset, UE3_custom_fps_fix, global_scale,
+            # UnDrew Edit Start : Pass settings.
+            blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, settings.anim_offset, UE3_custom_fps_fix, UE3_set_action_id_root, global_scale,
                                  fbx_ktime)
             # UnDrew Edit End
 

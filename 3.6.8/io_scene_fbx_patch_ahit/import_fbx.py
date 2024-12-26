@@ -740,7 +740,7 @@ def blen_read_animations_action_item(action, item, cnodes, fps, anim_offset, glo
 
 
 # UnDrew Edit Start : Pass the FPS fix setting.
-def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_offset, UE3_custom_fps_fix, global_scale):
+def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_offset, UE3_custom_fps_fix, UE3_set_action_id_root, global_scale):
 # UnDrew Edit End
     """
     Recreate an action per stack/layer/object combinations.
@@ -748,6 +748,23 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
     it's up to user to reproduce them!
     """
     from bpy.types import ShapeKey, Material, Camera
+
+    # UnDrew Add Start : The ID.id_type property was only introduced in 4.1, so this is my own hacky substitute for that.
+    # 99% of people won't even end up export these things, even on accident. Why did I put so much effort in this????
+    # Based on: https://blender.stackexchange.com/a/290717
+    id_type_substitutes = {
+        'VECTORFONT': 'FONT',
+        # Uncomment if 4.0 or later:
+        # 'GREASEPENCILV3': 'GREASEPENCIL_V3',
+        'LIGHTPROBE': 'LIGHT_PROBE',
+        'FREESTYLELINESTYLE': 'LINESTYLE',
+        'METABALL': 'META',
+        'PARTICLESETTINGS': 'PARTICLE'
+    }
+    def get_id_type(id_data):
+        id_type = id_data.bl_rna.identifier.upper()
+        return id_type_substitutes.get(id_type, id_type)
+    # UnDrew Add End
 
     actions = {}
     for as_uuid, ((fbx_asdata, _blen_data), alayers) in stacks.items():
@@ -780,6 +797,10 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
                         action_name = "|".join((id_data.name, stack_name, layer_name))
                     actions[key] = action = bpy.data.actions.new(action_name)
                     action.use_fake_user = True
+                    # UnDrew Add Start : Set the proper id_root on the action, so it isn't possible to irreparably lock an action to the wrong type.
+                    if UE3_set_action_id_root:
+                        action.id_root = get_id_type(id_data)
+                    # UnDrew Add End
                 # If none yet assigned, assign this action to id_data.
                 if not id_data.animation_data:
                     id_data.animation_data_create()
@@ -2683,6 +2704,7 @@ def load(operator, context, filepath="",
          UE3_import_scale_inheritance=True,
          UE3_fps_import_rule='IF_FOUND',   # doesn't need to be passed in the settings tuple, it's only used here.
          UE3_custom_fps_fix=True,   # ...neither does this.
+         UE3_set_action_id_root=True,   # ...neither does this.
          UE3_connect_children=False,
          # UnDrew Add End
          force_connect_children=False,
@@ -3418,7 +3440,7 @@ def load(operator, context, filepath="",
 
             # And now that we have sorted all this, apply animations!
             # UnDrew Edit Start : Pass the FPS fix setting.
-            blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, settings.anim_offset, UE3_custom_fps_fix, global_scale)
+            blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, settings.anim_offset, UE3_custom_fps_fix, UE3_set_action_id_root, global_scale)
             # UnDrew Edit End
 
         _(); del _
