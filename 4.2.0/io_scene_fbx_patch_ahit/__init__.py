@@ -58,6 +58,8 @@ DEF_IMPORT_CONNECT_CHILDREN = False
 DEF_IMPORT_FPS_RULE = 'IF_FOUND'
 # For vanilla behaviour, change this one to False
 DEF_IMPORT_CUSTOM_FPS_FIX = True
+# For vanilla behaviour, change this one to False
+DEF_IMPORT_ACTION_DOMAIN = True
 
 # For vanilla behaviour, change this one to False
 DEF_EXPORT_DONT_ADD_ARMATURE_BONE = True
@@ -183,6 +185,14 @@ class ImportFBX(bpy.types.Operator, ImportHelper):
         name="UE3 - Custom FPS fix",
         description="Fixes an oversight where the Base part of a custom frame rate would get ignored when importing animations",
         default=DEF_IMPORT_CUSTOM_FPS_FIX,
+    )
+    # UnDrew Add End
+    # UnDrew Add Start : Fix for actions being created without initializing their id_root.
+    UE3_set_action_id_root: BoolProperty(
+        name="UE3 - Set action domains",
+        description="Automatically makes imported actions only appear on the relevant Object/ID types. "
+                    "Useful to avoid accidently locking an action to the wrong type later down the line",
+        default=DEF_IMPORT_ACTION_DOMAIN,
     )
     # UnDrew Add End
 
@@ -354,6 +364,9 @@ def import_panel_animation(layout, operator):
         # UnDrew Add End
         # UnDrew Add Start : Time dilation fix when using Custom FPS.
         body.prop(operator, "UE3_custom_fps_fix")
+        # UnDrew Add End
+        # UnDrew Add Start : Fix for actions being created without initializing their id_root.
+        body.prop(operator, "UE3_set_action_id_root")
         # UnDrew Add End
 
 
