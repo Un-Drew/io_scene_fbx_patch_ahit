@@ -314,6 +314,9 @@ FBXTransformData = namedtuple("FBXTransformData", (
     "loc", "geom_loc",
     "rot", "rot_ofs", "rot_piv", "pre_rot", "pst_rot", "rot_ord", "rot_alt_mat", "geom_rot",
     "sca", "sca_ofs", "sca_piv", "geom_sca",
+    # UnDrew Add Start : Store InheritType.
+    "inherit_type",
+    # UnDrew Add End
 ))
 
 
@@ -528,9 +531,18 @@ def blen_read_object_transform_preprocess(fbx_props, fbx_obj, rot_alt_mat, use_p
         pst_rot = const_vector_zero_3d
         rot_ord = 'XYZ'
 
+    # UnDrew Add Start : Read InheritType.
+    # XXX : Idk if defaulting to 1 (RSrs) makes sense here, but it's what used to be the ONLY supported format.
+    inherit_type = elem_props_get_enum(fbx_props, b'InheritType', 1)
+    # UnDrew Add End
+
     return FBXTransformData(loc, geom_loc,
                             rot, rot_ofs, rot_piv, pre_rot, pst_rot, rot_ord, rot_alt_mat, geom_rot,
-                            sca, sca_ofs, sca_piv, geom_sca)
+                            sca, sca_ofs, sca_piv, geom_sca,
+                            # UnDrew Add Start : Store InheritType.
+                            inherit_type
+                            # UnDrew Add End
+                            )
 
 
 # ---------
@@ -1057,7 +1069,9 @@ def blen_read_animations_action_item(action, item, cnodes, fps, anim_offset, glo
         blen_store_keyframes_multi(combined_fbx_times, zip(blen_curves, channel_values), anim_offset, fps, fbx_ktime)
 
 
-def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_offset, global_scale, fbx_ktime):
+# UnDrew Edit Start : Pass the FPS fix setting.
+def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_offset, UE3_custom_fps_fix, UE3_set_action_id_root, global_scale, fbx_ktime):
+# UnDrew Edit End
     """
     Recreate an action per stack/layer/object combinations.
     Only the first found action is linked to objects, more complex setups are not handled,
@@ -1097,14 +1111,20 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
                         action_name = "|".join((id_data.name, stack_name, layer_name))
                     actions[key] = action = bpy.data.actions.new(action_name)
                     action.use_fake_user = True
+                    # UnDrew Add Start : Set the proper id_root on the action, so it isn't possible to irreparably lock an action to the wrong type.
+                    if UE3_set_action_id_root:
+                        action.id_root = id_data.id_type
+                    # UnDrew Add End
                 # If none yet assigned, assign this action to id_data.
                 if not id_data.animation_data:
                     id_data.animation_data_create()
                 if not id_data.animation_data.action:
                     id_data.animation_data.action = action
                 # And actually populate the action!
-                blen_read_animations_action_item(action, item, cnodes, scene.render.fps, anim_offset, global_scale,
+                # UnDrew Edit Start : Divide by fps_base to use the *final* fps.
+                blen_read_animations_action_item(action, item, cnodes, (scene.render.fps / scene.render.fps_base) if UE3_custom_fps_fix else scene.render.fps, anim_offset, global_scale,
                                                  shape_key_values, fbx_ktime)
+                # UnDrew Edit End
 
     # If the minimum/maximum animated value is outside the slider range of the shape key, attempt to expand the slider
     # range until the animated range fits and has extra room to be decreased or increased further.
@@ -2463,9 +2483,26 @@ class FbxImportHelperNode:
                 child.armature = armature
                 child.find_armature_bones(armature)
 
-    def find_armatures(self):
+    # UnDrew Edit Start : Pass in the import settings, to be used by this function.
+    def find_armatures(self, settings):
+    # UnDrew Edit End
         needs_armature = False
         for child in self.children:
+            # UnDrew Add Start : Fix for Blender interpreting the root bone as the Armature.
+            """
+            Unreal exports the root node as b'Root', which causes Blender to believe it's
+            an Empty, therefore converting it into an Armature. But this screws up weight
+            paints for that root bone, so that's no good. If the empty we're at (for unreal
+            exports, that's BaseNode) has b'Root' children (for unreal, the Root node), turn
+            that child into a bone so that us (the BaseNode) can be turned into an Armature.
+
+            Side note here: I've looked at other FBX files (not from Blender or Unreal), and
+            noticed that none of them define anything as a b'Root'. No idea if it's even part
+            of the FBX standard, or what it's *supposed* to resemble.
+            """
+            if settings.UE3_import_root_as_bone and child.fbx_type == b'Root':
+                child.is_bone = True
+            # UnDrew Add End
             if child.is_bone:
                 needs_armature = True
                 break
@@ -2492,7 +2529,9 @@ class FbxImportHelperNode:
         for child in self.children:
             if child.is_armature or child.is_bone:
                 continue
-            child.find_armatures()
+            # UnDrew Edit Start : Pass in the import settings, to be used by this function.
+            child.find_armatures(settings)
+            # UnDrew Edit End
 
     def find_bone_children(self):
         has_bone_children = False
@@ -2605,6 +2644,11 @@ class FbxImportHelperNode:
                 child_bone.parent = par_bone
                 child_head = child_bone.head
 
+            # UnDrew Add Start : Don't do any of this if the custom setting is disabled.
+            if not settings.UE3_connect_children:
+                return
+            # UnDrew Add End
+
             if similar_values_iter(par_bone.tail, child_head):
                 if child_bone is not None:
                     child_bone.use_connect = True
@@ -2625,6 +2669,11 @@ class FbxImportHelperNode:
             connect_ctx[1] = connected
 
         def child_connect_finalize(par_bone, connect_ctx):
+            # UnDrew Add Start : Don't do any of this if the custom setting is disabled.
+            if not settings.UE3_connect_children:
+                return
+            # UnDrew Add End
+
             force_connect_children, connected = connect_ctx
             # Do nothing if force connection is not enabled!
             if force_connect_children and connected is not None and connected is not ...:
@@ -2670,6 +2719,18 @@ class FbxImportHelperNode:
         bone_matrix = parent_matrix @ self.get_bind_matrix().normalized()
 
         bone.matrix = bone_matrix
+
+        # UnDrew Add Start : Set the proper inherit_scale value based on FBX's InheritType.
+        # TODO: This is not accurate when there's different InheritTypes in the same skeleton. Oh well!
+        if settings.UE3_import_scale_inheritance:
+            bone.inherit_scale = {
+                0: 'ALIGNED',   # 0 = RrSs
+                1: 'FULL',      # 1 = RSrs
+                2: 'NONE'       # 2 = Rrs
+            }.get(self.fbx_transform_data.inherit_type, 'FULL')
+        else:
+            bone.inherit_scale = 'FULL'
+        # UnDrew Add End
 
         force_connect_children = settings.force_connect_children
 
@@ -3030,6 +3091,14 @@ def load(operator, context, filepath="",
          use_custom_props=True,
          use_custom_props_enum_as_string=True,
          ignore_leaf_bones=False,
+         # UnDrew Add Start : New import settings.
+         UE3_import_root_as_bone=True,
+         UE3_import_scale_inheritance=True,
+         UE3_fps_import_rule='IF_FOUND',   # doesn't need to be passed in the settings tuple, it's only used here.
+         UE3_custom_fps_fix=True,   # ...neither does this.
+         UE3_set_action_id_root=True,   # ...neither does this.
+         UE3_connect_children=False,
+         # UnDrew Add End
          force_connect_children=False,
          automatic_bone_orientation=False,
          primary_bone_axis='Y',
@@ -3155,13 +3224,23 @@ def load(operator, context, filepath="",
                                                      ).to_4x4()
 
     # Compute framerate settings.
-    custom_fps = elem_props_get_number(fbx_settings_props, b'CustomFrameRate', 25.0)
-    time_mode = elem_props_get_enum(fbx_settings_props, b'TimeMode')
-    real_fps = {eid: val for val, eid in FBX_FRAMERATES[1:]}.get(time_mode, custom_fps)
-    if real_fps <= 0.0:
-        real_fps = 25.0
-    scene.render.fps = round(real_fps)
-    scene.render.fps_base = scene.render.fps / real_fps
+    # UnDrew Edit Start : FPS import rules.
+    def import_fps():
+        if UE3_fps_import_rule == 'NEVER':
+            return
+        custom_fps = elem_props_get_number(fbx_settings_props, b'CustomFrameRate', -1.0)
+        time_mode = elem_props_get_enum(fbx_settings_props, b'TimeMode')
+        real_fps = {eid: val for val, eid in FBX_FRAMERATES[1:]}.get(time_mode, custom_fps)
+        if real_fps <= 0.0:
+            if UE3_fps_import_rule == 'IF_FOUND':
+                return
+            else:
+                real_fps = 25.0
+        scene.render.fps = round(real_fps)
+        scene.render.fps_base = scene.render.fps / real_fps
+
+    import_fps()
+    # UnDrew Edit End
 
     # store global settings that need to be accessed during conversion
     settings = FBXImportSettings(
@@ -3174,6 +3253,9 @@ def load(operator, context, filepath="",
         use_custom_props, use_custom_props_enum_as_string,
         nodal_material_wrap_map, image_cache,
         ignore_leaf_bones, force_connect_children, automatic_bone_orientation, bone_correction_matrix,
+        # UnDrew Add Start : New import settings.
+        UE3_import_root_as_bone, UE3_import_scale_inheritance, UE3_connect_children,
+        # UnDrew Add End
         use_prepost_rot, colors_type,
     )
 
@@ -3416,8 +3498,22 @@ def load(operator, context, filepath="",
                     # set parent
                     child.parent = parent
 
+        # UnDrew Add Start : Print fbx_type recursively.
+        """
+        def print_node_and_children(node, indent="", curr_depth=0):
+            print(curr_depth, indent + str(node) + ".fbx_type = " + str(node.fbx_type))
+            for child in node.children:
+                print_node_and_children(child, indent + "    ", curr_depth + 1)
+            if curr_depth == 0:
+                print("Done!")
+        print_node_and_children(root_helper)
+        """
+        # UnDrew Add End
+
         # find armatures (either an empty below a bone or a new node inserted at the bone
-        root_helper.find_armatures()
+        # UnDrew Edit Start : Pass in the import settings, to be used by this function.
+        root_helper.find_armatures(settings)
+        # UnDrew Edit End
 
         # mark nodes that have bone children
         root_helper.find_bone_children()
@@ -3800,8 +3896,10 @@ def load(operator, context, filepath="",
                     curvenodes[acn_uuid][ac_uuid] = (fbx_acitem, channel)
 
             # And now that we have sorted all this, apply animations!
-            blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, settings.anim_offset, global_scale,
+            # UnDrew Edit Start : Pass settings.
+            blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, settings.anim_offset, UE3_custom_fps_fix, UE3_set_action_id_root, global_scale,
                                  fbx_ktime)
+            # UnDrew Edit End
 
         _()
         del _

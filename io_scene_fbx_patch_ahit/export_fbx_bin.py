@@ -85,6 +85,10 @@ from .fbx_utils import (
     FBXExportSettingsMedia, FBXExportSettings, FBXExportData,
 )
 
+# UnDrew Add Start : Import Iterable, for removing prefixes from animation names.
+from collections.abc import Iterable
+# UnDrew Add End
+
 # Units converters!
 convert_sec_to_ktime = units_convertor("second", "ktime")
 convert_sec_to_ktime_iter = units_convertor_iter("second", "ktime")
@@ -587,8 +591,8 @@ def fbx_data_light_elements(root, lamp, scene_data):
 
     light_key = scene_data.data_lights[lamp]
     do_light = True
-    do_shadow = False
     # NOTE: this was removed from lamps, always write black.
+    do_shadow = False
     shadow_color = Vector((0.0, 0.0, 0.0))
     if lamp.type not in {'HEMI'}:
         do_light = True
@@ -735,12 +739,16 @@ def fbx_data_bindpose_element(root, me_obj, me, scene_data, arm_obj=None, mat_wo
     mat_world_obj = me_obj.fbx_object_matrix(scene_data, global_space=True)
     fbx_posenode = elem_empty(fbx_pose, b"PoseNode")
     elem_data_single_int64(fbx_posenode, b"Node", me_obj.fbx_uuid)
-    elem_data_single_float64_array(fbx_posenode, b"Matrix", matrix4_to_array(mat_world_obj))
+    # UnDrew Edit Start : Matrix double precision.
+    elem_data_single_float64_array(fbx_posenode, b"Matrix", matrix4_to_array(mat_world_obj, double_precision=scene_data.settings.UE3_matrix_double_precision))
+    # UnDrew Edit End
     # Second node is armature object itself.
     if arm_obj != me_obj:
         fbx_posenode = elem_empty(fbx_pose, b"PoseNode")
         elem_data_single_int64(fbx_posenode, b"Node", arm_obj.fbx_uuid)
-        elem_data_single_float64_array(fbx_posenode, b"Matrix", matrix4_to_array(mat_world_arm))
+        # UnDrew Edit Start : Matrix double precision.
+        elem_data_single_float64_array(fbx_posenode, b"Matrix", matrix4_to_array(mat_world_arm, double_precision=scene_data.settings.UE3_matrix_double_precision))
+        # UnDrew Edit End
     # And all bones of armature!
     mat_world_bones = {}
     for bo_obj in bones:
@@ -748,7 +756,9 @@ def fbx_data_bindpose_element(root, me_obj, me, scene_data, arm_obj=None, mat_wo
         mat_world_bones[bo_obj] = bomat
         fbx_posenode = elem_empty(fbx_pose, b"PoseNode")
         elem_data_single_int64(fbx_posenode, b"Node", bo_obj.fbx_uuid)
-        elem_data_single_float64_array(fbx_posenode, b"Matrix", matrix4_to_array(bomat))
+        # UnDrew Edit Start : Matrix double precision.
+        elem_data_single_float64_array(fbx_posenode, b"Matrix", matrix4_to_array(bomat, double_precision=scene_data.settings.UE3_matrix_double_precision))
+        # UnDrew Edit End
 
     return mat_world_obj, mat_world_bones
 
@@ -1857,11 +1867,13 @@ def fbx_data_armature_elements(root, arm_obj, scene_data):
                 #          **it is stored in bone space in FBX data!** See:
                 #          http://area.autodesk.com/forum/autodesk-fbx/fbx-sdk/why-the-values-return-
                 #                 by-fbxcluster-gettransformmatrix-x-not-same-with-the-value-in-ascii-fbx-file/
+                # UnDrew Edit Start : Matrix double precision.
                 elem_data_single_float64_array(
                     fbx_clstr, b"Transform", matrix4_to_array(
-                        mat_world_bones[bo_obj].inverted_safe() @ mat_world_obj))
-                elem_data_single_float64_array(fbx_clstr, b"TransformLink", matrix4_to_array(mat_world_bones[bo_obj]))
-                elem_data_single_float64_array(fbx_clstr, b"TransformAssociateModel", matrix4_to_array(mat_world_arm))
+                        mat_world_bones[bo_obj].inverted_safe() @ mat_world_obj, double_precision=scene_data.settings.UE3_matrix_double_precision))
+                elem_data_single_float64_array(fbx_clstr, b"TransformLink", matrix4_to_array(mat_world_bones[bo_obj], double_precision=scene_data.settings.UE3_matrix_double_precision))
+                elem_data_single_float64_array(fbx_clstr, b"TransformAssociateModel", matrix4_to_array(mat_world_arm, double_precision=scene_data.settings.UE3_matrix_double_precision))
+                # UnDrew Edit End
 
 
 def fbx_data_leaf_bone_elements(root, scene_data):
@@ -1944,7 +1956,9 @@ def fbx_data_object_elements(root, ob_obj, scene_data):
     elem_data_single_int32(model, b"Version", FBX_MODELS_VERSION)
 
     # Object transform info.
-    loc, rot, scale, matrix, matrix_rot = ob_obj.fbx_object_tx(scene_data)
+    # UnDrew Edit Start : Export default transforms as the rest pose (if requested).
+    loc, rot, scale, matrix, matrix_rot = ob_obj.fbx_object_tx(scene_data, rest=(scene_data.settings.bake_anim and scene_data.settings.UE3_rest_default_pose))
+    # UnDrew Edit End
     rot = tuple(convert_rad_to_deg_iter(rot))
 
     tmpl = elem_props_template_init(scene_data.templates, b"Model")
@@ -1962,7 +1976,9 @@ def fbx_data_object_elements(root, ob_obj, scene_data):
     # invalid -1 value...
     elem_props_template_set(tmpl, props, "p_integer", b"DefaultAttributeIndex", 0)
 
-    elem_props_template_set(tmpl, props, "p_enum", b"InheritType", 1)  # RSrs
+    # UnDrew Edit Start : Apply the proper InheritType of objects (rather than hardcoding it as RSrs (1)).
+    elem_props_template_set(tmpl, props, "p_enum", b"InheritType", ob_obj.inherit_type)
+    # UnDrew Edit End
 
     # Custom properties.
     if scene_data.settings.use_custom_props:
@@ -2396,7 +2412,14 @@ def fbx_animations_do(scene_data, ref_id, f_start, f_end, start_zero, objects=No
 
     astack_key = get_blender_anim_stack_key(scene, ref_id)
     alayer_key = get_blender_anim_layer_key(scene, ref_id)
-    name = (get_blenderID_name(ref_id) if ref_id else scene.name).encode()
+    # UnDrew Add Start : Auto-gen a name from the last element of an iterable, if requested.
+    # NOTE: Using isinstance() for this, to stay consistent with fbx_utils.
+    #       This relies on importing Iterable from collections.abc tho.
+    if scene_data.settings.UE3_remove_anim_object_prefix and isinstance(ref_id, Iterable):
+        name = get_blenderID_name(ref_id[-1]).encode()
+    else:
+    # UnDrew Add End
+        name = (get_blenderID_name(ref_id) if ref_id else scene.name).encode()
 
     if start_zero:
         f_end -= f_start
@@ -2432,6 +2455,10 @@ def fbx_animations(scene_data):
 
     # Per-NLA strip animstacks.
     if scene_data.settings.bake_anim_use_nla_strips:
+        # UnDrew Add Start : Grouped tracks + Tracks that should be muted in the end (ALL Mode).
+        all_grouped_tracks = []
+        og_muted_tracks = set()
+        # UnDrew Add End
         strips = []
         ob_actions = []
         for ob_obj in scene_data.objects:
@@ -2450,24 +2477,91 @@ def fbx_animations(scene_data):
             # We have to remove active action from objects, it overwrites strips actions otherwise...
             ob_actions.append((ob, ob.animation_data.action, restore_use_tweak_mode))
             ob.animation_data.action = None
-            for track in ob.animation_data.nla_tracks:
-                if track.mute:
-                    continue
-                for strip in track.strips:
-                    if strip.mute:
+            # UnDrew Add Start : ALL Mode support + Support for using NLA tracks instead (else: vanilla behaviour).
+            if scene_data.settings.UE3_nla_modular_anim_support:
+                group_tracks = []
+                group_frame_start = None
+                group_frame_end = None
+                # Let's hope using "reversed" here doesn't cause any memory/performance issues :/
+                for track in reversed(ob.animation_data.nla_tracks):
+                    if not scene_data.settings.UE3_nla_force_export and track.mute:
                         continue
-                    strips.append(strip)
-                    strip.mute = True
+                    # Find out the time range of this track, and whether it's additive.
+                    all_strips_disabled = True
+                    track_additive = True
+                    for strip in track.strips:
+                        if strip.mute:
+                            continue
+                        all_strips_disabled = False
+                        if strip.blend_type == 'REPLACE':
+                            track_additive = False
+                        if group_frame_start is None:
+                            group_frame_start = strip.frame_start
+                            group_frame_end = strip.frame_end
+                        else:
+                            group_frame_start = min(group_frame_start, strip.frame_start)
+                            group_frame_end = max(group_frame_end, strip.frame_end)
+                    if all_strips_disabled:
+                        continue
+                    group_tracks.append(track)
+                    if not track_additive:
+                        # We've reached a non-additive track. This marks the end of a grouped track.
+                        all_grouped_tracks.append((tuple(group_tracks), track.mute, ob_obj, group_frame_start, group_frame_end))
+                        group_tracks.clear()
+                        group_frame_start = None
+                        group_frame_end = None
+                    # And of course, we need to mute it.
+                    track.mute = True
+            else:
+            # UnDrew Add End
+                # UnDrew Edit Start : ALL Mode support. Remember the owning object of every strip as well.
+                for track in ob.animation_data.nla_tracks:
+                    if track.mute:
+                        if scene_data.settings.UE3_nla_force_export:
+                            og_muted_tracks.add(track)
+                            track.mute = False
+                        else:
+                            continue
+                    for strip in track.strips:
+                        if strip.mute:
+                            continue
+                        strips.append((strip, ob_obj))
+                        strip.mute = True
+                # UnDrew Edit End
 
-        for strip in strips:
-            strip.mute = False
-            add_anim(animations, animated,
-                     fbx_animations_do(scene_data, strip, strip.frame_start, strip.frame_end, True, force_keep=True))
-            strip.mute = True
-            scene.frame_set(scene.frame_current, subframe=0.0)
+        # UnDrew Add Start : Support for using NLA tracks instead (else: vanilla behaviour).
+        if scene_data.settings.UE3_nla_modular_anim_support:
+            for group_tracks, og_mute_state, ob_obj, group_frame_start, group_frame_end in all_grouped_tracks:
+                for track in group_tracks:
+                    track.mute = False
+                # Pass ob_obj into the objects parameter, if requested.
+                add_anim(animations, animated,
+                        fbx_animations_do(scene_data, group_tracks[-1], group_frame_start, group_frame_end, True,
+                                          objects=({ob_obj} if scene_data.settings.UE3_nla_only_animate_owner else None), force_keep=True))
+                for track in group_tracks:
+                    track.mute = True
+                scene.frame_set(scene.frame_current, subframe=0.0)
+            
+            for group_tracks, og_mute_state, ob_obj, group_frame_start, group_frame_end in all_grouped_tracks:
+                for track in group_tracks:
+                    track.mute = og_mute_state
+        else:
+        # UnDrew Add End
+            # UnDrew Edit Start : "strips" is now a list of tuples, so unpack them. Also pass ob_obj into the objects parameter, if requested. + ALL Mode cleanup.
+            for strip, ob_obj in strips:
+                strip.mute = False
+                add_anim(animations, animated,
+                         fbx_animations_do(scene_data, strip, strip.frame_start, strip.frame_end, True,
+                                          objects=({ob_obj} if scene_data.settings.UE3_nla_only_animate_owner else None), force_keep=True))
+                strip.mute = True
+                scene.frame_set(scene.frame_current, subframe=0.0)
 
-        for strip in strips:
-            strip.mute = False
+            for strip, ob_obj in strips:
+                strip.mute = False
+            
+            for track in og_muted_tracks:
+                track.mute = True
+            # UnDrew Edit End
 
         for ob, ob_act, restore_use_tweak_mode in ob_actions:
             ob.animation_data.action = ob_act
@@ -2588,6 +2682,14 @@ def fbx_data_from_scene(scene, depsgraph, settings):
             if dp_obj.type not in dp_objtypes:
                 continue
             objects[dp_obj] = None
+
+    # UnDrew Add Start : Gather and mark empty chains, so they can be properly ignored.
+    # NOTE: Some of this has NOT been tested, but seems to work well enough with scenes that
+    # only contain an armature, a model, and nothing else. Please, PLEASE report any errors
+    # that stem from my changes :P
+    if settings.UE3_dont_add_armature_bone:
+        UE3_mark_empty_chains(UE3_gather_empty_chains(objects), settings)
+    # UnDrew Add End
 
     perfmon.step("FBX export prepare: Wrapping Data (lamps, cameras, empties)...")
 
@@ -2993,9 +3095,19 @@ def fbx_data_from_scene(scene, depsgraph, settings):
             elif ob_obj.type == 'CAMERA':
                 cam_key = data_cameras[ob_obj]
                 connections.append((b"OO", get_fbx_uuid_from_key(cam_key), ob_obj.fbx_uuid, None))
-            elif ob_obj.type == 'EMPTY' or ob_obj.type == 'ARMATURE':
+                
+            # UnDrew Edit Start : Don't make connections to the NodeAttributes for Armatures and Empties.
+            # Unreal 3 sees those and treats them as bones, and having one or more extra bones appear isn't
+            # very cool or awesome. Skipping the NodeAttributes here seems to cause them to be completely
+            # ignored by unreal's importer. Though this also means the influence of these empties needs to
+            # be handled by their children instead (if we want this to export correctly). This is done
+            # somewhere else, see: ( export_fbx_bin.UE3_mark_empty_chains ), ( fbx_utils.fbx_object_matrix ).
+            #
+            elif (not settings.UE3_dont_add_armature_bone) and (ob_obj.type == 'EMPTY' or ob_obj.type == 'ARMATURE'):
                 empty_key = data_empties[ob_obj]
                 connections.append((b"OO", get_fbx_uuid_from_key(empty_key), ob_obj.fbx_uuid, None))
+            # UnDrew Edit End
+            
             elif ob_obj.type in BLENDER_OBJECT_TYPES_MESHLIKE:
                 mesh_key, _me, _free = data_meshes[ob_obj]
                 connections.append((b"OO", get_fbx_uuid_from_key(mesh_key), ob_obj.fbx_uuid, None))
@@ -3061,6 +3173,9 @@ def fbx_data_from_scene(scene, depsgraph, settings):
             tex_key, _fbx_prop = data_textures[blender_tex_key]
             connections.append((b"OO", get_fbx_uuid_from_key(vid_key), get_fbx_uuid_from_key(tex_key), None))
 
+    # UnDrew Comment Start : Don't make animation connections yet. Should happen after batching, so we don't
+    # end up with a ridiculous amount amount of connections for each batched animation file.
+    """
     # Animations
     for astack_key, astack, alayer_key, _name, _fstart, _fend in animations:
         # Animstack itself is linked nowhere!
@@ -3083,6 +3198,8 @@ def fbx_data_from_scene(scene, depsgraph, settings):
                     if len(keys):
                         # Animcurve -> Animcurvenode.
                         connections.append((b"OP", get_fbx_uuid_from_key(acurve_key), acurvenode_id, fbx_item.encode()))
+    """
+    # UnDrew Comment End
 
     perfmon.level_down()
 
@@ -3117,12 +3234,28 @@ def fbx_header_elements(root, scene_data, time=None):
     time is expected to be a datetime.datetime object, or None (using now() in this case).
     """
     app_vendor = "Blender Foundation"
-    app_name = "Blender (stable FBX IO)"
+    app_name = "Blender (stable FBX IO - AHiT patch)"  # UnDrew Edit : Rename.
     app_ver = bpy.app.version_string
+
+    # UnDrew Edit Start : Seemingly can't use bl_info for extensions. Read version from TOML directly... I guess.
+    addon_ver = "Unknown add-on version"
+    try:
+        import toml
+        with open(os.path.join(os.path.dirname(__file__), 'blender_manifest.toml'), 'r') as f:
+            config = toml.load(f)
+            addon_ver = config['version']
+        del toml
+    except:
+        pass
+    
+    """ vvv Original code vvv
 
     from . import bl_info
     addon_ver = bl_info["version"]
     del bl_info
+
+    """
+    # UnDrew Edit End
 
     # ##### Start of FBXHeaderExtension element.
     header_ext = elem_empty(root, b"FBXHeaderExtension")
@@ -3146,8 +3279,10 @@ def fbx_header_elements(root, scene_data, time=None):
     elem_data_single_int32(elem, b"Second", time.second)
     elem_data_single_int32(elem, b"Millisecond", time.microsecond // 1000)
 
-    elem_data_single_string_unicode(header_ext, b"Creator", "%s - %s - %d.%d.%d"
-                                                % (app_name, app_ver, addon_ver[0], addon_ver[1], addon_ver[2]))
+    # UnDrew Edit Start : addon_ver was changed to a string - white it as one.
+    elem_data_single_string_unicode(header_ext, b"Creator", "%s - %s - %s"
+                                                % (app_name, app_ver, addon_ver))
+    # UnDrew Edit End
 
     # 'SceneInfo' seems mandatory to get a valid FBX file...
     # TODO use real values!
@@ -3192,8 +3327,10 @@ def fbx_header_elements(root, scene_data, time=None):
                                     "".format(time.year, time.month, time.day, time.hour, time.minute, time.second,
                                               time.microsecond * 1000))
 
-    elem_data_single_string_unicode(root, b"Creator", "%s - %s - %d.%d.%d"
-                                          % (app_name, app_ver, addon_ver[0], addon_ver[1], addon_ver[2]))
+    # UnDrew Edit Start : addon_ver was changed to a string - white it as one.
+    elem_data_single_string_unicode(root, b"Creator", "%s - %s - %s"
+                                          % (app_name, app_ver, addon_ver))
+    # UnDrew Edit End
 
     # ##### Start of GlobalSettings element.
     global_settings = elem_empty(root, b"GlobalSettings")
@@ -3366,6 +3503,30 @@ def fbx_connections_elements(root, scene_data):
 
     for c in scene_data.connections:
         elem_connection(connections, *c)
+    
+    # UnDrew Add Start : Moved from fbx_data_from_scene, to work better with batched animations.
+    for astack_key, astack, alayer_key, _name, _fstart, _fend in scene_data.animations:
+        # Animstack itself is linked nowhere!
+        astack_id = get_fbx_uuid_from_key(astack_key)
+        # For now, only one layer!
+        alayer_id = get_fbx_uuid_from_key(alayer_key)
+        elem_connection(connections, b"OO", alayer_id, astack_id, None)
+        for elem_key, (alayer_key, acurvenodes) in astack.items():
+            elem_id = get_fbx_uuid_from_key(elem_key)
+            # Animlayer -> animstack.
+            # alayer_id = get_fbx_uuid_from_key(alayer_key)
+            # connections.append((b"OO", alayer_id, astack_id, None))
+            for fbx_prop, (acurvenode_key, acurves, acurvenode_name) in acurvenodes.items():
+                # Animcurvenode -> animalayer.
+                acurvenode_id = get_fbx_uuid_from_key(acurvenode_key)
+                elem_connection(connections, b"OO", acurvenode_id, alayer_id, None)
+                # Animcurvenode -> object property.
+                elem_connection(connections, b"OP", acurvenode_id, elem_id, fbx_prop.encode())
+                for fbx_item, (acurve_key, default_value, (keys, values), acurve_valid) in acurves.items():
+                    if len(keys):
+                        # Animcurve -> Animcurvenode.
+                        elem_connection(connections, b"OP", get_fbx_uuid_from_key(acurve_key), acurvenode_id, fbx_item.encode())
+    # UnDrew Add End
 
 
 def fbx_takes_elements(root, scene_data):
@@ -3416,6 +3577,15 @@ def save_single(operator, scene, depsgraph, filepath="",
                 bake_anim_simplify_factor=1.0,
                 bake_anim_force_startend_keying=True,
                 add_leaf_bones=False,
+                # UnDrew Add Start : New export settings.
+                UE3_dont_add_armature_bone=True,
+                UE3_matrix_double_precision=False,
+                UE3_rest_default_pose=True,
+                UE3_remove_anim_object_prefix=True,
+                UE3_nla_modular_anim_support=True,
+                UE3_nla_only_animate_owner=True,
+                UE3_nla_force_export=False,
+                # UnDrew Add End
                 primary_bone_axis='Y',
                 secondary_bone_axis='X',
                 use_metadata=True,
@@ -3440,6 +3610,10 @@ def save_single(operator, scene, depsgraph, filepath="",
 
     if 'OTHER' in object_types:
         object_types |= BLENDER_OTHER_OBJECT_TYPES
+
+    # UnDrew Add Start : I need the axis transformation separated, so I'm holding it here.
+    UE3_global_matrix_no_scale = global_matrix
+    # UnDrew Add End
 
     # Default Blender unit is equivalent to meter, while FBX one is centimeter...
     unit_scale = units_blender_to_fbx_factor(scene) if apply_unit_scale else 100.0
@@ -3491,8 +3665,15 @@ def save_single(operator, scene, depsgraph, filepath="",
         bake_space_transform, global_matrix_inv, global_matrix_inv_transposed,
         context_objects, object_types, use_mesh_modifiers, use_mesh_modifiers_render,
         mesh_smooth_type, use_subsurf, use_mesh_edges, use_tspace, use_triangles,
-        armature_nodetype, use_armature_deform_only,
-        add_leaf_bones, bone_correction_matrix, bone_correction_matrix_inv,
+        armature_nodetype, use_armature_deform_only, add_leaf_bones,
+        # UnDrew Add Start : New export settings.
+        UE3_dont_add_armature_bone, UE3_matrix_double_precision,
+        UE3_rest_default_pose, UE3_remove_anim_object_prefix, UE3_nla_modular_anim_support, UE3_nla_only_animate_owner, UE3_nla_force_export,
+        # UnDrew Add End
+        # UnDrew Add Start : Not settings, but should be held here for performance reasons.
+        UE3_global_matrix_no_scale,
+        # UnDrew Add End
+        bone_correction_matrix, bone_correction_matrix_inv,
         bake_anim, bake_anim_use_all_bones, bake_anim_use_nla_strips, bake_anim_use_all_actions,
         bake_anim_step, bake_anim_simplify_factor, bake_anim_force_startend_keying,
         False, media_settings, use_custom_props, colors_type, prioritize_active_color
@@ -3506,36 +3687,264 @@ def save_single(operator, scene, depsgraph, filepath="",
     # Generate some data about exported scene...
     scene_data = fbx_data_from_scene(scene, depsgraph, settings)
 
-    # Enable multithreaded array compression in FBXElem and wait until all threads are done before exiting the context
-    # manager.
-    with encode_bin.FBXElem.enable_multithreading_cm():
-        # Writing elements into an FBX hierarchy can now begin.
-        root = elem_empty(None, b"")  # Root element has no id, as it is not saved per se!
+    # UnDrew Add Start : Batch-export animations, if enabled. (else: Vanilla behaviour)
+    if scene_data.settings.bake_anim and kwargs["UE3_batch_anims"]:
+        # Copy the animations list, since we'll wanna export each animation individually.
+        all_animations = scene_data.animations.copy() if scene_data.animations else ()
 
-        # Mostly FBXHeaderExtension and GlobalSettings.
-        fbx_header_elements(root, scene_data)
+        # Let's export the main file, if needed.
+        if not kwargs["UE3_batch_skip_main"]:
+            # Clear animations so they're not exported here.
+            if type(scene_data.animations) is list:
+                scene_data.animations.clear()
 
-        # Documents and References are pretty much void currently.
-        fbx_documents_elements(root, scene_data)
-        fbx_references_elements(root, scene_data)
+            write_start = time.time()
 
-        # Templates definitions.
-        fbx_definitions_elements(root, scene_data)
+            with encode_bin.FBXElem.enable_multithreading_cm():
+                root = elem_empty(None, b"")
+                fbx_header_elements(root, scene_data)
+                fbx_documents_elements(root, scene_data)
+                fbx_references_elements(root, scene_data)
+                fbx_definitions_elements(root, scene_data)
+                fbx_objects_elements(root, scene_data)
+                fbx_connections_elements(root, scene_data)
+                fbx_takes_elements(root, scene_data)
 
-        # Actual data.
-        fbx_objects_elements(root, scene_data)
+            encode_bin.write(filepath, root, FBX_VERSION)
 
-        # How data are inter-connected.
-        fbx_connections_elements(root, scene_data)
+            print('Spent %.4f sec. writing %r' % (time.time() - write_start, filepath))
 
-        # Animation.
-        fbx_takes_elements(root, scene_data)
+            # Restore them (leaving things as we found them).
+            if type(scene_data.animations) is list:
+                # NOTE: Use extend() since += behaves a bit weirdly...
+                scene_data.animations.extend(all_animations)
+        
+        if all_animations:
+            # Create the base root path for our batched animations.
+            root_path = os.path.abspath(os.path.join(os.path.dirname(filepath), kwargs["UE3_batch_subpath"]))
+            if not os.path.exists(root_path):
+                os.makedirs(root_path)
 
-        # Cleanup!
+            # Get object cache to be able to turn wrapper keys back into objects (necessary to get animation users).
+            object_wrapper_cache = getattr(ObjectWrapper, "_cache", None)
+            assert(object_wrapper_cache is not None)   # This should ALWAYS be valid.
+
+            UE3_batch_object_filter = kwargs["UE3_batch_object_filter"]
+
+            # Cross-export variables.
+
+            anim_objects = scene_data.objects
+            anim_data_empties = scene_data.data_empties
+            anim_data_lights = scene_data.data_lights
+            anim_data_cameras = scene_data.data_cameras
+            anim_data_meshes = scene_data.data_meshes
+            anim_mesh_material_indices = scene_data.mesh_material_indices
+            anim_data_bones = scene_data.data_bones
+            anim_data_leaf_bones = scene_data.data_leaf_bones
+            anim_data_deformers_skin = scene_data.data_deformers_skin
+            anim_data_deformers_shape = scene_data.data_deformers_shape
+            anim_data_materials = scene_data.data_materials
+            anim_data_textures = scene_data.data_textures
+            anim_data_videos = scene_data.data_videos
+
+            prev_anim_objects = None
+            prev_anim_objects_no_bones = None
+            curr_anim_list = [None]
+
+        # Then, export each individual animation.
+        for anim in all_animations:
+            curr_anim_list[0] = anim
+
+            # Cleanup persistent data related to creating FBX elements, left behind by the prev export (e.g. FBXTemplate.written).
+            for template in scene_data.templates.values():
+                template.written[0] = False
+
+            if UE3_batch_object_filter != 'ALL':
+                # Determine all objects related to the animation.
+                anim_objects = {}
+                alayers = anim[1]
+                for ob_key in alayers.keys():
+                    ob_obj = object_wrapper_cache.get(ob_key)
+                    if ob_obj is None:
+                        continue
+                    if ob_obj.is_bone:
+                        # Don't gather any bones for now, just their armatures. For the sake of consistency
+                        # and performance, all bones of an armature will be exported.
+                        anim_objects[ob_obj.armature] = None
+                    else:
+                        anim_objects[ob_obj] = None
+
+                # Now that we know our animation's objects, only filter everything else if this object list actually differs from the last.
+                # NOTE: With dictionaries, "==" checks the object contents, not the object addresses.
+                if prev_anim_objects_no_bones is not None and anim_objects == prev_anim_objects_no_bones:
+                    # It's the same, so let's just use the prev list with bones.
+                    anim_objects = prev_anim_objects
+                else:
+                    # Now that we're sure this anim uses different objects from prev, let's mark this as the new prev, and include all bones.
+                    prev_anim_objects_no_bones = anim_objects.copy()
+                    for ob_obj in tuple(anim_objects):
+                        if not ob_obj.is_object:
+                            continue
+                        if ob_obj.type == 'ARMATURE':
+                            # TBH I'm not sure why there's a condition here... is there ever a situation where a bone *isn't* part of the ObjectWrapper list?
+                            anim_objects |= {bo_obj: None for bo_obj in ob_obj.bones if bo_obj in scene_data.objects}
+                            if UE3_batch_object_filter == 'ONLY_OWNER_AND_MESH':
+                                deformers = scene_data.data_deformers_skin[ob_obj]
+                                # NOTE: deformer[1] is the mesh object (ObjectWrapper) that a deformer is linked to.
+                                anim_objects |= {deformer[1]: None for deformer in deformers.values()}
+                    prev_anim_objects = anim_objects
+
+                    # Checks if a blender mesh data is present in data_meshes.
+                    def is_me_in_data_meshes(me, anim_data_meshes):
+                        # mesh_data[1] = The blender mesh data in a data_meshes entry.
+                        return any(me is mesh_data[1] for mesh_data in anim_data_meshes.values())
+
+                    # Time to filter the scene_data's other properties, so the FBX file doesn't save any garbage data
+                    # unrelated to this batched animation.
+
+                    # Only mesh data for our filtered objects.
+                    anim_data_meshes = {ob_obj: d
+                                        for ob_obj, d in scene_data.data_meshes.items() if ob_obj in anim_objects}
+                    # Only material data referenced by our filtered objects.
+                    # d[1] = the objects a material is applied on.
+                    anim_data_materials = {ma: d
+                                           for ma, d in scene_data.data_materials.items() if any(ob_obj in anim_objects for ob_obj in d[1])}
+                    # Only material index data for our used meshes.
+                    anim_mesh_material_indices = {me: d
+                                                  for me, d in scene_data.mesh_material_indices.items() if is_me_in_data_meshes(me, anim_data_meshes)}
+                    # Only textures referenced by our materials.
+                    # blender_tex_key = (material, socket) combo. [0] is a material.
+                    anim_data_textures = {blender_tex_key: d
+                                          for blender_tex_key, d in scene_data.data_textures.items() if blender_tex_key[0] in anim_data_materials.keys()}
+                    # Only "videos" (images) used by textures.
+                    # blender_tex_key = Same as above, but "videos" (images) have a whole list of them (d[1]).
+                    anim_data_videos = {img: d
+                                        for img, d in scene_data.data_videos.items() if any(blender_tex_key in anim_data_textures.keys() for blender_tex_key in d[1])}
+                    # Only bone data for our filtered objects.
+                    anim_data_bones = {ob_obj: d
+                                       for ob_obj, d in scene_data.data_bones.items() if ob_obj in anim_objects}
+                    # Only shape data for our used meshes.
+                    anim_data_deformers_shape = {me: d
+                                                 for me, d in scene_data.data_deformers_shape.items() if is_me_in_data_meshes(me, anim_data_meshes)}
+                    # Only skinning data for our used meshes and bones.
+                    anim_data_deformers_skin = {}
+                    for ob_obj, d in scene_data.data_deformers_skin.items():
+                        if ob_obj not in anim_objects:
+                            continue
+                        d_filtered = {me: deformer for me, deformer in d.items() if deformer[1] in anim_data_meshes.keys()}
+                        if d_filtered:  # If, and only if, the deformer list actually has contents, after being filtered.
+                            anim_data_deformers_skin[ob_obj] = d_filtered
+
+                    # Though, regenerate these properties. This is much easier (and probably faster) than filtering the existing ones.
+                    anim_data_lights = {ob_obj.bdata.data: get_blenderID_key(ob_obj.bdata.data)
+                                        for ob_obj in anim_objects if ob_obj.type == 'LIGHT'}
+                    anim_data_cameras = {ob_obj: get_blenderID_key(ob_obj.bdata.data)
+                                         for ob_obj in anim_objects if ob_obj.type == 'CAMERA'}
+                    anim_data_empties = {ob_obj: get_blender_empty_key(ob_obj.bdata)
+                                         for ob_obj in anim_objects if ob_obj.type in {'EMPTY', 'ARMATURE'}}  # + armatures, they're considered empties!
+                    if scene_data.settings.add_leaf_bones:
+                        anim_data_leaf_bones = fbx_generate_leaf_bones(scene_data.settings, anim_data_bones)
+                    else:
+                        anim_data_leaf_bones = []
+
+                    # TODO: Technically, connections, template users and whatnot should be filtered here. Though,
+                    #       as far as I can tell, the FBX SDK is able to cleanly ignore mistakes like that. So for
+                    #       now, I'll just leave it be, and see if it spawns any issues.
+
+            # In any case, pack everything to a scene_data, which will be used when exporting this anim.
+            # TODO: No idea what's the deal with frame_start and frame_end, seems to be (intentionally??)
+            #       overwritten when actions are being exported. So I'll just leave it as-is, for now...
+            anim_scene_data = FBXExportData(
+                scene_data.templates, scene_data.templates_users, scene_data.connections,
+                scene_data.settings, scene_data.scene, scene_data.depsgraph, anim_objects, curr_anim_list, scene_data.animated, scene_data.frame_start, scene_data.frame_end,
+                anim_data_empties, anim_data_lights, anim_data_cameras, anim_data_meshes, anim_mesh_material_indices,
+                anim_data_bones, anim_data_leaf_bones, anim_data_deformers_skin, anim_data_deformers_shape,
+                scene_data.data_world, anim_data_materials, anim_data_textures, anim_data_videos,
+            )
+
+            # Then the actual export.
+
+            # anim[3] is the animation's name. Decode to a string, since it seems ( bpy.path.clean_name ) has an oversight with bytes.
+            output_path = os.path.join(root_path, bpy.path.clean_name(anim[3].decode(errors='replace')) + ".fbx")
+
+            write_start = time.time()
+
+            with encode_bin.FBXElem.enable_multithreading_cm():
+                root = elem_empty(None, b"")
+                fbx_header_elements(root, anim_scene_data)
+                fbx_documents_elements(root, anim_scene_data)
+                fbx_references_elements(root, anim_scene_data)
+                fbx_definitions_elements(root, anim_scene_data)
+                fbx_objects_elements(root, anim_scene_data)
+                fbx_connections_elements(root, anim_scene_data)
+                fbx_takes_elements(root, anim_scene_data)
+
+            encode_bin.write(output_path, root, FBX_VERSION)
+
+            print('Spent %.4f sec. writing %r' % (time.time() - write_start, output_path))
+
+            """ Debug stuff...
+            
+            def print_scene_data_stuff(scene_datas):
+                to_print = (
+                    ("data_empties", "EMPTIES"),
+                    ("data_lights", "LIGHTS"),
+                    ("data_cameras", "CAMERAS"),
+                    ("data_meshes", "MESHES"),
+                    ("data_materials", "MATERIALS"),
+                    ("mesh_material_indices", "MATERIAL INDICES"),
+                    ("data_textures", "TEXTURES"),
+                    ("data_videos", "VIDEOS"),
+                    ("data_bones", "BONES"),
+                    ("data_leaf_bones", "LEAF BONES"),
+                    ("data_deformers_skin", "SKIN DEFORMERS"),
+                    ("data_deformers_shape", "SHAPE DEFORMERS")
+                )
+                for attr, name in to_print:
+                    for i, s in enumerate(scene_datas):
+                        # 400 char limit, enough for me to get *the gist* of it.
+                        print(str(i + 1) + ")", name + ":", '%.400s' % str(getattr(s, attr)))
+            print("Listing objects involved in animation:", anim[3])
+            for ob_obj in anim_scene_data.objects:
+                print("    ", ob_obj)
+            print_scene_data_stuff((scene_data, anim_scene_data))
+
+            """
+
+        # Then finally, after all exports, cleanup. (like temp meshes)
         fbx_scene_data_cleanup(scene_data)
+    else:
+    # UnDrew Add End
+        # Enable multithreaded array compression in FBXElem and wait until all threads are done before exiting the context
+        # manager.
+        with encode_bin.FBXElem.enable_multithreading_cm():
+            # Writing elements into an FBX hierarchy can now begin.
+            root = elem_empty(None, b"")  # Root element has no id, as it is not saved per se!
 
-    # And we are done, all multithreaded tasks are complete, and we can write the whole thing to file!
-    encode_bin.write(filepath, root, FBX_VERSION)
+            # Mostly FBXHeaderExtension and GlobalSettings.
+            fbx_header_elements(root, scene_data)
+
+            # Documents and References are pretty much void currently.
+            fbx_documents_elements(root, scene_data)
+            fbx_references_elements(root, scene_data)
+
+            # Templates definitions.
+            fbx_definitions_elements(root, scene_data)
+
+            # Actual data.
+            fbx_objects_elements(root, scene_data)
+
+            # How data are inter-connected.
+            fbx_connections_elements(root, scene_data)
+
+            # Animation.
+            fbx_takes_elements(root, scene_data)
+
+            # Cleanup!
+            fbx_scene_data_cleanup(scene_data)
+
+        # And we are done, all multithreaded tasks are complete, and we can write the whole thing to file!
+        encode_bin.write(filepath, root, FBX_VERSION)
 
     # Clear cached ObjectWrappers!
     ObjectWrapper.cache_clear()
@@ -3752,3 +4161,111 @@ def save(operator, context,
             bpy.ops.object.mode_set(mode=org_mode)
 
     return ret
+
+
+# UnDrew Add Start : Gather and mark empty chains, so ( fbx_utils.ObjectWrapper.fbx_object_matrix ) can properly bake their transforms.
+# TODO: Maybe it's better to use bake_space_transform for this? Problem is I don't fully understand it :P
+
+def UE3_is_object_empty(ob_obj):
+    return ob_obj._tag == 'OB' and ob_obj.type in {'ARMATURE', 'EMPTY'}
+
+
+def UE3_gather_empty_chains(objects):
+    # Gather all uninterrupted chains of empties/armatures in the hierarchy.
+    # NOTE: If a chain starting from A splits up into multiple children, B and C,
+    # those will be written as separate chains: [A, ..., B] and [A, ..., C]
+    empty_chains = []
+    empties = [] # Empties that were already registered in one or multiple chains
+    for ob_obj in objects:
+        if not UE3_is_object_empty(ob_obj):
+            continue
+
+        if ob_obj in empties:
+            # This node was already registered and nothing new can be discovered from it or its parents
+            continue
+        empties.append(ob_obj)
+
+        curr_chain = [ob_obj]
+        curr_parent = ob_obj
+        did_merge = False
+        while curr_parent and UE3_is_object_empty(curr_parent):
+            # Let's see if we can merge this with an existing chain.
+            for c in empty_chains:
+                if curr_parent is c[-1]:
+                    # The last element of this chain matches with the soon-to-be first
+                    # element of the current chain. So stop generating it and merge.
+                    # NOTE: Use extend() since += behaves a bit weirdly...
+                    c.extend(curr_chain)
+                    did_merge = True
+                    break
+            if did_merge:
+                break
+            # Can't merge yet, let's just continue the chain
+            curr_chain.insert(0, curr_parent)
+            if curr_parent not in empties:
+                empties.append(curr_parent)
+            curr_parent = curr_parent.parent
+
+        # The "while" loop ended without merging, so this is a brand new chain.
+        if not did_merge:
+            empty_chains.append(curr_chain)
+    return empty_chains
+
+
+def UE3_mark_empty_chains(empty_chains, settings):
+    """
+
+    0. UE3_is_empty = Whether this is an empty and if the properties below should be taken for granted.
+
+    1. UE3_empty_chain_parent = The parent of the current empty chain(s).
+    - Used by empties, which should be zero-influence, to return the exact same global matrix as that parent.
+    - Used by the eventual valid children of the chain to get the correct parent global matrix, as well as
+    getting the correct parent-specific transformations, such as bone-tip to bone-base conversion. In other
+    words, it acts as if the chain of empties wasn't even there to begin with.
+
+    2. UE3_empty_chain_offset_matrix = The collective local-space influence of the entire empty chain (up until
+    the current node).
+    - Used by the valid children of the chain to ADD TO their usual local space matrices. The empties aren't
+    able to apply those transformations themselves, so the children should.
+
+    3. UE3_empty_chain_scale_matrix, UE3_empty_chain_scale_matrix_inv = Matrices containing the isolated scale
+    in the UE3_empty_chain_offset_matrix property. Also multiplied by global matrix scale, if the empty chain
+    is at the root.
+    - Used by bones to apply the empty chain scale transformations permanently to their translation, rather than
+    representing it as a mere scale on the matrix. This is purely meant for keeping files backwards compatible
+    with Blender.
+    - Currently assumes scales applied by these EMPTIES are uniform (either way, FBX skeletons break if they aren't).
+
+    """
+    # Go through those chains and set their properties accordingly.
+    for c in empty_chains:
+        UE3_empty_chain_parent = c[0].parent
+        UE3_empty_chain_offset_matrix = None
+        for ob_obj in c:
+            if ob_obj.UE3_is_empty:
+                # Grab it from this node, as it was already calculated.
+                UE3_empty_chain_offset_matrix = ob_obj.UE3_empty_chain_offset_matrix
+            else:
+                if not UE3_empty_chain_offset_matrix:
+                    # First ever node in the chain, start with the first local matrix.
+                    UE3_empty_chain_offset_matrix = ob_obj.matrix_rest_local
+                else:
+                    # Add the current local matrix to it.
+                    UE3_empty_chain_offset_matrix = UE3_empty_chain_offset_matrix @ ob_obj.matrix_rest_local
+                # Then save that in the node.
+                ob_obj.UE3_empty_chain_offset_matrix = UE3_empty_chain_offset_matrix
+                # Let's do the scale as well
+                scale = UE3_empty_chain_offset_matrix.median_scale
+                if not UE3_empty_chain_parent:
+                    scale *= settings.global_scale
+                if scale != 0.0:
+                    ob_obj.UE3_empty_chain_scale_matrix = Matrix.Scale(scale, 4)
+                    ob_obj.UE3_empty_chain_scale_matrix_inv = Matrix.Scale(1.0 / scale, 4)
+                else:
+                    ob_obj.UE3_empty_chain_scale_matrix = Matrix.Identity(4)   # Failsafe
+                    ob_obj.UE3_empty_chain_scale_matrix_inv = ob_obj.UE3_empty_chain_scale_matrix
+
+            ob_obj.UE3_is_empty = True  # Marks this was initialized.
+            ob_obj.UE3_empty_chain_parent = UE3_empty_chain_parent
+
+# UnDrew Add End
