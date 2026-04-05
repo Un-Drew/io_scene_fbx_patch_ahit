@@ -1,7 +1,3 @@
-# SPDX-FileCopyrightText: 2013 Campbell Barton
-#
-# SPDX-License-Identifier: GPL-2.0-or-later
-
 try:
     from . import data_types
     from .fbx_utils_threading import MultiThreadedTaskConsumer

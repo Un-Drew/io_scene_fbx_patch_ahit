@@ -1,0 +1,22 @@
+schema_version = "1.0.0"
+
+id = "io_scene_fbx_compat"
+version = "4.3.1"
+name = "FBX format - Compat"
+tagline = "FBX addon patched for backwards-compatibility"
+maintainer = "Back-compat by: UnDrew, Original add-on by: Blender Foundation"
+type = "add-on"
+
+# # Optional: link to documentation, support, source files, etc
+# website = "https://extensions.blender.org/add-ons/my-example-package/"
+
+tags = ["Import-Export"]
+
+blender_version_min = "4.2.0"
+
+license = [
+  "SPDX:GPL-3.0-or-later",
+]
+
+[permissions]
+files = "Import/export FBX from/to disk"

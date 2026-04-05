@@ -1,23 +1,23 @@
-# SPDX-FileCopyrightText: 2011-2023 Blender Foundation
-#
-# SPDX-License-Identifier: GPL-2.0-or-later
-
 bl_info = {
-    "name": "FBX format",
-    "author": "Campbell Barton, Bastien Montagne, Jens Restemeier, @Mysteryem",
-    "version": (5, 12, 5),
-    "blender": (4, 2, 0),
+    "name": "FBX format - Compat",
+    "author": "Back-compat by: UnDrew, Original add-on by: Blender Foundation",
+    "version": (4, 3, 1),
+    "blender": (2, 81, 0),
     "location": "File > Import-Export",
-    "description": "FBX IO meshes, UVs, vertex colors, materials, textures, cameras, lamps and actions",
+    "description": "FBX addon patched for backwards-compatibility",
     "warning": "",
     "doc_url": "{BLENDER_MANUAL_URL}/addons/import_export/scene_fbx.html",
-    "support": 'OFFICIAL',
+    "support": 'COMMUNITY',
     "category": "Import-Export",
 }
 
 
 if "bpy" in locals():
     import importlib
+    # COMPAT ADD BEGIN
+    if "fbx_api_compat" in locals():
+        importlib.reload(fbx_api_compat)
+    # COMPAT ADD END
     if "import_fbx" in locals():
         importlib.reload(import_fbx)
     if "export_fbx_bin" in locals():
@@ -40,15 +40,198 @@ from bpy_extras.io_utils import (
     orientation_helper,
     path_reference_mode,
     axis_conversion,
-    poll_file_object_drop,
 )
+
+# COMPAT ADD BEGIN
+from . import fbx_api_compat as api_compat
+# COMPAT ADD END
+
+# COMPAT ADD BEGIN
+if api_compat.HAS_IMPORT_HELPER_INVOKE_POPUP_FUNC:
+# COMPAT ADD END
+    from bpy_extras.io_utils import (
+        poll_file_object_drop,
+    )
+
+# COMPAT ADD BEGIN
+from dataclasses import dataclass, field
+# NOTE: Obsolete since later versions of Python, but needed in 3.7.
+from typing import Optional, List
+
+
+@dataclass
+class CompatPanelInfo:
+    """
+    Helper class for an IO property panel, which holds enough information to define it either as a layout panel (created
+    using `bpy.types.UILayout.panel()`), or as a registerable panel (that extends `bpy.types.Panel`).
+
+    To be compatible with importing via drag-n-drop or exporting from collections, the addon needs to use layout panels.
+    But those are only available since 4.1, so this class needs to support both panel types for backwards-compatibility.
+
+    The property-drawing functions (import_panel_include, export_main, etc.) have been modified to remove their reliance
+    on `panel()`, keeping only the common drawing code of the panel's body. This class does rest of the work, like
+    creating the panel, setting the right flags, setting up the header, give it a check-box if needed, etc.
+    """
+
+    try:
+        from typing import Protocol
+    except ImportError:
+        # `Protocol` is preferred here because it allows giving the parameters names, while `Callable` does not.
+        # But if we don't have a choice (current py ver < 3.8), just use `Callable`. :/
+        from typing import Callable
+        CompatPanelDrawType = Callable[[bpy.types.UILayout, bpy.types.Operator, bool], None]
+        del Callable
+    else:
+        class CompatPanelDrawType(Protocol):
+            def __call__(self, body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_brows: bool) -> None: ...
+        del Protocol
+
+    # Name that uniquely identifies this panel. It's later combined with `categ` in `draw_in_op()` or `make_PT_type()`,
+    # so this only needs to be unique against the panels in this addon, at most.
+    id_name: str
+    # Display name of this panel. Rendered next to the panel's check-box, if there is one.
+    label: str
+    # Callback for drawing the panel's body, using the properties defined in the passed-in operator.
+    draw: CompatPanelDrawType
+    # Display these properties as if they were part of the parent layout (operator/panel).
+    hide_header: bool = False
+    # Whether this panel should begin collapsed.
+    default_closed: bool = False
+    # If not None, the name of the boolean property that will be used to draw a check-box next to the header. This will
+    # also control the body's enabled state (normal/grayed out).
+    header_prop_name: Optional[str] = None
+    # Panels to nest within this one.
+    sub_panels: Optional[List['CompatPanelInfo']] = None
+
+    if api_compat.HAS_LAYOUT_PANELS:
+        def draw_in_op(self, operator: bpy.types.Operator, \
+                       layout: bpy.types.UILayout, categ: str, is_file_browser: bool) -> None:
+            """
+            Creates a layout panel according to self's fields, sets up the header, draws the body using self's callback,
+            and draws sub-panels, if there are any.
+            """
+            if self.hide_header:
+                body = layout
+            else:
+                header, body = layout.panel(categ + "_" + self.id_name, default_closed=self.default_closed)
+                if self.header_prop_name:
+                    header.use_property_split = False
+                    header.prop(operator, self.header_prop_name, text="")
+                header.label(text=self.label)
+            if body:
+                if self.header_prop_name:
+                    body.enabled = getattr(operator, self.header_prop_name)
+                self.draw(body, operator, is_file_browser)
+                if self.sub_panels:
+                    for sub_panel in self.sub_panels:
+                        sub_panel.draw_in_op(operator, body, categ, is_file_browser)
+
+        @classmethod
+        def draw_all_in_op(cls, panels: List['CompatPanelInfo'], operator: bpy.types.Operator, \
+                           context: bpy.types.Context, categ: str) -> None:
+            """
+            Helper function for drawing a list of panels in an operator's layout.
+            """
+            layout = operator.layout
+            layout.use_property_split = True
+            layout.use_property_decorate = False  # No animation.
+
+            # Are we inside the File browser
+            is_file_browser = context.space_data.type == 'FILE_BROWSER'
+
+            for panel in panels:
+                panel.draw_in_op(operator, layout, categ, is_file_browser)
+
+    def make_PT_type(self, categ: str, only_visible_in_op: str, bl_parent_id: str = "FILE_PT_operator") -> type:
+        """
+        Defines a class extending `bpy.types.Panel` accodring to self's fields, defined to be nested in a file browser's
+        properties panel, only when the active operator matches `only_visible_in_op`. `bl_parent_id` can be supplied
+        to nest one panel into another. Note that this doesn't take sub-panels into account; see: `make_PT_types()`.
+
+        NOTE: `only_visible_in_op` must use Blender's internal operator naming convention.
+              E.g., instead of "categ_name.addon_name", use "CATEG_NAME_OP_addon_name". (Case sensitive!)
+        """
+        class_name = categ + "_PT_" + self.id_name
+
+        @classmethod
+        def panel_method_poll(cls, context):
+            sfile = context.space_data
+            operator = sfile.active_operator
+
+            return operator.bl_idname == cls._only_visible_in_op
+
+        def panel_method_draw_header(self, context):
+            sfile = context.space_data
+            operator = sfile.active_operator
+
+            self.layout.prop(operator, self._panel_info.header_prop_name, text="")
+
+        def panel_method_draw(self, context):
+            layout = self.layout
+            layout.use_property_split = True
+            layout.use_property_decorate = False  # No animation.
+
+            sfile = context.space_data
+            operator = sfile.active_operator
+
+            if self._panel_info.header_prop_name:
+                layout.enabled = getattr(operator, self._panel_info.header_prop_name)
+
+            self._panel_info.draw(layout, operator, True)
+
+        bl_options = set()
+        if self.hide_header:
+            bl_options.add('HIDE_HEADER')
+        if self.default_closed:
+            bl_options.add('DEFAULT_CLOSED')
+
+        attrs = {
+            'bl_idname': class_name,
+            'bl_space_type': 'FILE_BROWSER',
+            'bl_region_type': 'TOOL_PROPS',
+            'bl_label': self.label,
+            'bl_parent_id': bl_parent_id,
+            'bl_options': bl_options,
+
+            '_only_visible_in_op': only_visible_in_op,
+            '_panel_info': self,
+
+            # NOTE: Since these functions live in the class, they're effectively indistinguishable from methods.
+            'poll': panel_method_poll,
+            'draw': panel_method_draw,
+        }
+
+        if self.header_prop_name:
+            attrs['draw_header'] = panel_method_draw_header
+
+        return type(class_name, (bpy.types.Panel,), attrs)
+
+    @classmethod
+    def make_PT_types(cls, panels: List['CompatPanelInfo'], \
+                      categ: str, only_visible_in_op: str, bl_parent_id: str = "FILE_PT_operator") -> List[type]:
+        """
+        Helper function for defining the classes for an operator's list of panels, defining sub_panels as well.
+        """
+        types = []
+        for panel in panels:
+            panel_type = panel.make_PT_type(categ, only_visible_in_op, bl_parent_id=bl_parent_id)
+            types.append(panel_type)
+            if panel.sub_panels:
+                types.extend(cls.make_PT_types(panel.sub_panels, \
+                                        categ, only_visible_in_op, bl_parent_id=panel_type.bl_idname))
+        return types
+
+
+COMPAT_PANELS_IMPORT: List[CompatPanelInfo] = []
+COMPAT_PANELS_EXPORT: List[CompatPanelInfo] = []
+# COMPAT ADD END
 
 
 @orientation_helper(axis_forward='-Z', axis_up='Y')
-class ImportFBX(bpy.types.Operator, ImportHelper):
+class ImportFBX_compat(bpy.types.Operator, ImportHelper):
     """Load a FBX file"""
-    bl_idname = "import_scene.fbx"
-    bl_label = "Import FBX"
+    bl_idname = "import_scene.fbx_compat"
+    bl_label = "Import FBX - Compat"
     bl_options = {'UNDO', 'PRESET'}
 
     directory: StringProperty()
@@ -194,14 +377,10 @@ class ImportFBX(bpy.types.Operator, ImportHelper):
     )
 
     def draw(self, context):
-        layout = self.layout
-        layout.use_property_split = True
-        layout.use_property_decorate = False  # No animation.
-
-        import_panel_include(layout, self)
-        import_panel_transform(layout, self)
-        import_panel_animation(layout, self)
-        import_panel_armature(layout, self)
+        # COMPAT EDIT BEGIN : See CompatPanelInfo.
+        if api_compat.HAS_LAYOUT_PANELS:
+            CompatPanelInfo.draw_all_in_op(COMPAT_PANELS_IMPORT, self, context, "FBX_compat")
+        # COMPAT EDIT END
 
     def execute(self, context):
         keywords = self.as_keywords(ignore=("filter_glob", "directory", "ui_tab", "filepath", "files"))
@@ -220,77 +399,86 @@ class ImportFBX(bpy.types.Operator, ImportHelper):
         else:
             return import_fbx.load(self, context, filepath=self.filepath, **keywords)
 
-    def invoke(self, context, event):
-        return self.invoke_popup(context)
+    # COMPAT ADD BEGIN
+    if api_compat.HAS_IMPORT_HELPER_INVOKE_POPUP_FUNC:
+    # COMPAT ADD END
+        def invoke(self, context, event):
+            return self.invoke_popup(context)
 
 
-def import_panel_include(layout, operator):
-    header, body = layout.panel("FBX_import_include", default_closed=False)
-    header.label(text="Include")
-    if body:
-        body.prop(operator, "use_custom_normals")
-        body.prop(operator, "use_subsurf")
-        body.prop(operator, "use_custom_props")
-        sub = body.row()
-        sub.enabled = operator.use_custom_props
-        sub.prop(operator, "use_custom_props_enum_as_string")
-        body.prop(operator, "use_image_search")
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
+def import_panel_include(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
+    body.prop(operator, "use_custom_normals")
+    body.prop(operator, "use_subsurf")
+    body.prop(operator, "use_custom_props")
+    sub = body.row()
+    sub.enabled = operator.use_custom_props
+    sub.prop(operator, "use_custom_props_enum_as_string")
+    body.prop(operator, "use_image_search")
+    # COMPAT ADD BEGIN
+    if api_compat.HAS_MESH_COL_ATTRS_PROP and api_compat.HAS_COL_ATTR_SRGB_PROP:
+    # COMPAT ADD END
         body.prop(operator, "colors_type")
 
 
-def import_panel_transform(layout, operator):
-    header, body = layout.panel("FBX_import_transform", default_closed=False)
-    header.label(text="Transform")
-    if body:
-        body.prop(operator, "global_scale")
-        body.prop(operator, "decal_offset")
-        row = body.row()
-        row.prop(operator, "bake_space_transform")
-        row.label(text="", icon='ERROR')
-        body.prop(operator, "use_prepost_rot")
-
-        import_panel_transform_orientation(body, operator)
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
+def import_panel_transform(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
+    body.prop(operator, "global_scale")
+    body.prop(operator, "decal_offset")
+    row = body.row()
+    row.prop(operator, "bake_space_transform")
+    row.label(text="", icon='ERROR')
+    body.prop(operator, "use_prepost_rot")
 
 
-def import_panel_transform_orientation(layout, operator):
-    header, body = layout.panel("FBX_import_transform_manual_orientation", default_closed=False)
-    header.use_property_split = False
-    header.prop(operator, "use_manual_orientation", text="")
-    header.label(text="Manual Orientation")
-    if body:
-        body.enabled = operator.use_manual_orientation
-        body.prop(operator, "axis_forward")
-        body.prop(operator, "axis_up")
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
+def import_panel_transform_orientation(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
+    body.enabled = operator.use_manual_orientation
+    body.prop(operator, "axis_forward")
+    body.prop(operator, "axis_up")
 
 
-def import_panel_animation(layout, operator):
-    header, body = layout.panel("FBX_import_animation", default_closed=True)
-    header.use_property_split = False
-    header.prop(operator, "use_anim", text="")
-    header.label(text="Animation")
-    if body:
-        body.enabled = operator.use_anim
-        body.prop(operator, "anim_offset")
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
+def import_panel_animation(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
+    body.enabled = operator.use_anim
+    body.prop(operator, "anim_offset")
 
 
-def import_panel_armature(layout, operator):
-    header, body = layout.panel("FBX_import_armature", default_closed=True)
-    header.label(text="Armature")
-    if body:
-        body.prop(operator, "ignore_leaf_bones")
-        body.prop(operator, "force_connect_children"),
-        body.prop(operator, "automatic_bone_orientation"),
-        sub = body.column()
-        sub.enabled = not operator.automatic_bone_orientation
-        sub.prop(operator, "primary_bone_axis")
-        sub.prop(operator, "secondary_bone_axis")
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
+def import_panel_armature(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
+    body.prop(operator, "ignore_leaf_bones")
+    body.prop(operator, "force_connect_children"),
+    body.prop(operator, "automatic_bone_orientation"),
+    sub = body.column()
+    sub.enabled = not operator.automatic_bone_orientation
+    sub.prop(operator, "primary_bone_axis")
+    sub.prop(operator, "secondary_bone_axis")
+
+
+# COMPAT ADD BEGIN
+COMPAT_PANELS_IMPORT = [
+    CompatPanelInfo(id_name="import_include", label="Include", draw=import_panel_include),
+    CompatPanelInfo(id_name="import_transform", label="Transform", draw=import_panel_transform, sub_panels = [
+        CompatPanelInfo(id_name="import_transform_manual_orientation", label="Manual Orientation", \
+                        draw=import_panel_transform_orientation, header_prop_name="use_manual_orientation"),
+    ]),
+    CompatPanelInfo(id_name="import_animation", label="Animation", draw=import_panel_animation, default_closed=True, \
+                    header_prop_name="use_anim"),
+    CompatPanelInfo(id_name="import_armature", label="Armature", draw=import_panel_armature, default_closed=True),
+]
+# COMPAT ADD END
 
 
 @orientation_helper(axis_forward='-Z', axis_up='Y')
-class ExportFBX(bpy.types.Operator, ExportHelper):
+class ExportFBX_compat(bpy.types.Operator, ExportHelper):
     """Write a FBX file"""
-    bl_idname = "export_scene.fbx"
-    bl_label = "Export FBX"
+    bl_idname = "export_scene.fbx_compat"
+    bl_label = "Export FBX - Compat"
     bl_options = {'UNDO', 'PRESET'}
 
     filename_ext = ".fbx"
@@ -557,19 +745,10 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
     )
 
     def draw(self, context):
-        layout = self.layout
-        layout.use_property_split = True
-        layout.use_property_decorate = False  # No animation.
-
-        # Are we inside the File browser
-        is_file_browser = context.space_data.type == 'FILE_BROWSER'
-
-        export_main(layout, self, is_file_browser)
-        export_panel_include(layout, self, is_file_browser)
-        export_panel_transform(layout, self)
-        export_panel_geometry(layout, self)
-        export_panel_armature(layout, self)
-        export_panel_animation(layout, self)
+        # COMPAT EDIT BEGIN : See CompatPanelInfo.
+        if api_compat.HAS_LAYOUT_PANELS:
+            CompatPanelInfo.draw_all_in_op(COMPAT_PANELS_EXPORT, self, context, "FBX_compat")
+        # COMPAT EDIT END
 
     @property
     def check_extension(self):
@@ -596,7 +775,9 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
         return export_fbx_bin.save(self, context, **keywords)
 
 
-def export_main(layout, operator, is_file_browser):
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
+def export_main(layout: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
     row = layout.row(align=True)
     row.prop(operator, "path_mode")
     sub = row.row(align=True)
@@ -609,108 +790,138 @@ def export_main(layout, operator, is_file_browser):
         sub.prop(operator, "use_batch_own_dir", text="", icon='NEWFOLDER')
 
 
-def export_panel_include(layout, operator, is_file_browser):
-    header, body = layout.panel("FBX_export_include", default_closed=False)
-    header.label(text="Include")
-    if body:
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
+def export_panel_include(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_UI_LAYOUT_COLUMN_AND_ROW_HEADINGS:
+        sublayout = body.column()
+    else:
+    # COMPAT ADD END
         sublayout = body.column(heading="Limit to")
-        sublayout.enabled = (operator.batch_mode == 'OFF')
-        if is_file_browser:
-            sublayout.prop(operator, "use_selection")
-            sublayout.prop(operator, "use_visible")
-            sublayout.prop(operator, "use_active_collection")
+    sublayout.enabled = (operator.batch_mode == 'OFF')
+    if is_file_browser:
+        sublayout.prop(operator, "use_selection")
+        sublayout.prop(operator, "use_visible")
+        sublayout.prop(operator, "use_active_collection")
 
-        body.column().prop(operator, "object_types")
-        body.prop(operator, "use_custom_props")
-
-
-def export_panel_transform(layout, operator):
-    header, body = layout.panel("FBX_export_transform", default_closed=False)
-    header.label(text="Transform")
-    if body:
-        body.prop(operator, "global_scale")
-        body.prop(operator, "apply_scale_options")
-
-        body.prop(operator, "axis_forward")
-        body.prop(operator, "axis_up")
-
-        body.prop(operator, "apply_unit_scale")
-        body.prop(operator, "use_space_transform")
-        row = body.row()
-        row.prop(operator, "bake_space_transform")
-        row.label(text="", icon='ERROR')
+    body.column().prop(operator, "object_types")
+    body.prop(operator, "use_custom_props")
 
 
-def export_panel_geometry(layout, operator):
-    header, body = layout.panel("FBX_export_geometry", default_closed=True)
-    header.label(text="Geometry")
-    if body:
-        body.prop(operator, "mesh_smooth_type")
-        body.prop(operator, "use_subsurf")
-        body.prop(operator, "use_mesh_modifiers")
-        #sub = body.row()
-        # sub.enabled = operator.use_mesh_modifiers and False  # disabled in 2.8...
-        #sub.prop(operator, "use_mesh_modifiers_render")
-        body.prop(operator, "use_mesh_edges")
-        body.prop(operator, "use_triangles")
-        sub = body.row()
-        # ~ sub.enabled = operator.mesh_smooth_type in {'OFF'}
-        sub.prop(operator, "use_tspace")
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
+def export_panel_transform(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
+    body.prop(operator, "global_scale")
+    body.prop(operator, "apply_scale_options")
+
+    body.prop(operator, "axis_forward")
+    body.prop(operator, "axis_up")
+
+    body.prop(operator, "apply_unit_scale")
+    body.prop(operator, "use_space_transform")
+    row = body.row()
+    row.prop(operator, "bake_space_transform")
+    row.label(text="", icon='ERROR')
+
+
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
+def export_panel_geometry(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
+    body.prop(operator, "mesh_smooth_type")
+    body.prop(operator, "use_subsurf")
+    body.prop(operator, "use_mesh_modifiers")
+    #sub = body.row()
+    # sub.enabled = operator.use_mesh_modifiers and False  # disabled in 2.8...
+    #sub.prop(operator, "use_mesh_modifiers_render")
+    body.prop(operator, "use_mesh_edges")
+    body.prop(operator, "use_triangles")
+    sub = body.row()
+    # ~ sub.enabled = operator.mesh_smooth_type in {'OFF'}
+    sub.prop(operator, "use_tspace")
+    # COMPAT ADD BEGIN
+    if api_compat.HAS_MESH_COL_ATTRS_PROP and api_compat.HAS_COL_ATTR_SRGB_PROP:
+    # COMPAT ADD END
         body.prop(operator, "colors_type")
-        body.prop(operator, "prioritize_active_color")
+    body.prop(operator, "prioritize_active_color")
 
 
-def export_panel_armature(layout, operator):
-    header, body = layout.panel("FBX_export_armature", default_closed=True)
-    header.label(text="Armature")
-    if body:
-        body.prop(operator, "primary_bone_axis")
-        body.prop(operator, "secondary_bone_axis")
-        body.prop(operator, "armature_nodetype")
-        body.prop(operator, "use_armature_deform_only")
-        body.prop(operator, "add_leaf_bones")
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
+def export_panel_armature(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
+    body.prop(operator, "primary_bone_axis")
+    body.prop(operator, "secondary_bone_axis")
+    body.prop(operator, "armature_nodetype")
+    body.prop(operator, "use_armature_deform_only")
+    body.prop(operator, "add_leaf_bones")
 
 
-def export_panel_animation(layout, operator):
-    header, body = layout.panel("FBX_export_bake_animation", default_closed=True)
-    header.use_property_split = False
-    header.prop(operator, "bake_anim", text="")
-    header.label(text="Animation")
-    if body:
-        body.enabled = operator.bake_anim
-        body.prop(operator, "bake_anim_use_all_bones")
-        body.prop(operator, "bake_anim_use_nla_strips")
-        body.prop(operator, "bake_anim_use_all_actions")
-        body.prop(operator, "bake_anim_force_startend_keying")
-        body.prop(operator, "bake_anim_step")
-        body.prop(operator, "bake_anim_simplify_factor")
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
+def export_panel_animation(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
+    body.enabled = operator.bake_anim
+    body.prop(operator, "bake_anim_use_all_bones")
+    body.prop(operator, "bake_anim_use_nla_strips")
+    body.prop(operator, "bake_anim_use_all_actions")
+    body.prop(operator, "bake_anim_force_startend_keying")
+    body.prop(operator, "bake_anim_step")
+    body.prop(operator, "bake_anim_simplify_factor")
 
 
-class IO_FH_fbx(bpy.types.FileHandler):
-    bl_idname = "IO_FH_fbx"
-    bl_label = "FBX"
-    bl_import_operator = "import_scene.fbx"
-    bl_export_operator = "export_scene.fbx"
-    bl_file_extensions = ".fbx"
+# COMPAT ADD BEGIN
+COMPAT_PANELS_EXPORT = [
+    CompatPanelInfo(id_name="export_main", label="", draw=export_main, hide_header=True),
+    CompatPanelInfo(id_name="export_include", label="Include", draw=export_panel_include),
+    CompatPanelInfo(id_name="export_transform", label="Transform", draw=export_panel_transform),
+    CompatPanelInfo(id_name="export_geometry", label="Geometry", draw=export_panel_geometry, default_closed=True),
+    CompatPanelInfo(id_name="export_armature", label="Armature", draw=export_panel_armature, default_closed=True),
+    CompatPanelInfo(id_name="export_animation", label="Animation", draw=export_panel_animation, default_closed=True, \
+                    header_prop_name="bake_anim"),
+]
+# COMPAT ADD END
 
-    @classmethod
-    def poll_drop(cls, context):
-        return poll_file_object_drop(context)
+
+# COMPAT ADD START
+if api_compat.HAS_FILE_HANDLERS and api_compat.HAS_IMPORT_HELPER_INVOKE_POPUP_FUNC:
+# COMPAT ADD END
+    class IO_FH_fbx_compat(bpy.types.FileHandler):
+        bl_idname = "IO_FH_fbx_compat"
+        bl_label = "FBX - Compat"
+        bl_import_operator = "import_scene.fbx_compat"
+        # COMPAT ADD START
+        if api_compat.HAS_COLLECTION_EXPORTERS:
+        # COMPAT ADD END
+            bl_export_operator = "export_scene.fbx_compat"
+        bl_file_extensions = ".fbx"
+
+        @classmethod
+        def poll_drop(cls, context):
+            return poll_file_object_drop(context)
 
 
 def menu_func_import(self, context):
-    self.layout.operator(ImportFBX.bl_idname, text="FBX (.fbx)")
+    self.layout.operator(ImportFBX_compat.bl_idname, text="FBX - Compat (.fbx)")
 
 
 def menu_func_export(self, context):
-    self.layout.operator(ExportFBX.bl_idname, text="FBX (.fbx)")
+    self.layout.operator(ExportFBX_compat.bl_idname, text="FBX - Compat (.fbx)")
 
 
-classes = (
-    ImportFBX,
-    ExportFBX,
-    IO_FH_fbx,
-)
+classes = []
+classes.append(ImportFBX_compat)
+# COMPAT ADD BEGIN
+if not api_compat.HAS_LAYOUT_PANELS:
+    classes.extend(CompatPanelInfo.make_PT_types(COMPAT_PANELS_IMPORT, "FBX_COMPAT", "IMPORT_SCENE_OT_fbx_compat"))
+# COMPAT ADD END
+classes.append(ExportFBX_compat)
+# COMPAT ADD BEGIN
+if not api_compat.HAS_LAYOUT_PANELS:
+    classes.extend(CompatPanelInfo.make_PT_types(COMPAT_PANELS_EXPORT, "FBX_COMPAT", "EXPORT_SCENE_OT_fbx_compat"))
+# COMPAT ADD END
+# COMPAT ADD START
+if api_compat.HAS_FILE_HANDLERS and api_compat.HAS_IMPORT_HELPER_INVOKE_POPUP_FUNC:
+# COMPAT ADD END
+    classes.append(IO_FH_fbx_compat)
 
 
 def register():

@@ -1,12 +1,3 @@
-# SPDX-FileCopyrightText: 2013-2023 Blender Foundation
-#
-# SPDX-License-Identifier: GPL-2.0-or-later
-
-# FBX 7.1.0 -> 7.4.0 loader for Blender
-
-# Not totally pep8 compliant.
-#   pep8 import_fbx.py --ignore=E501,E123,E702,E125
-
 if "bpy" in locals():
     import importlib
     if "parse_fbx" in locals():
@@ -54,6 +45,10 @@ from .fbx_utils import (
 )
 
 LINEAR_INTERPOLATION_VALUE = bpy.types.Keyframe.bl_rna.properties['interpolation'].enum_items['LINEAR'].value
+
+# COMPAT ADD BEGIN
+from . import fbx_api_compat as api_compat
+# COMPAT ADD END
 
 # global singleton, assign on execution
 fbx_elem_nil = None
@@ -866,7 +861,12 @@ def blen_store_keyframes_multi(fbx_key_times, fcurve_and_key_values_pairs, blen_
     # Compatible with C float type
     bl_keyframe_dtype = np.single
     # Compatible with C char type
-    bl_enum_dtype = np.ubyte
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_EXTENDED_DNA_TYPES_4_1:
+        bl_enum_dtype = np.byte
+    else:
+    # COMPAT ADD END
+        bl_enum_dtype = np.ubyte
 
     # The keyframe_points 'co' are accessed as flattened pairs of (time, value).
     # The key times are the same for each (blen_fcurve, key_values) pair, so only the values need to be updated for each
@@ -875,7 +875,10 @@ def blen_store_keyframes_multi(fbx_key_times, fcurve_and_key_values_pairs, blen_
     # Even indices are times.
     keyframe_points_co[0::2] = bl_key_times
 
-    interpolation_array = np.full(num_keys, LINEAR_INTERPOLATION_VALUE, dtype=bl_enum_dtype)
+    # COMPAT ADD BEGIN
+    if api_compat.HAS_FOREACH_SET_ENUM_SUPPORT:
+    # COMPAT ADD END
+        interpolation_array = np.full(num_keys, LINEAR_INTERPOLATION_VALUE, dtype=bl_enum_dtype)
 
     for blen_fcurve, key_values in fcurve_and_key_values_pairs:
         # The fcurve must be newly created and thus have no keyframe_points.
@@ -887,7 +890,14 @@ def blen_store_keyframes_multi(fbx_key_times, fcurve_and_key_values_pairs, blen_
         # Add the keyframe points to the FCurve and then set the 'co' and 'interpolation' of each point.
         blen_fcurve.keyframe_points.add(num_keys)
         blen_fcurve.keyframe_points.foreach_set('co', keyframe_points_co)
-        blen_fcurve.keyframe_points.foreach_set('interpolation', interpolation_array)
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_FOREACH_SET_ENUM_SUPPORT:
+            # Pre-2.90 versions don't provide any way to set this more efficiently... I think.
+            for key in blen_fcurve.keyframe_points:
+                key.interpolation = 'LINEAR'
+        else:
+        # COMPAT ADD END
+            blen_fcurve.keyframe_points.foreach_set('interpolation', interpolation_array)
 
         # Since we inserted our keyframes in 'ultra-fast' mode, we have to update the fcurves now.
         blen_fcurve.update()
@@ -1380,7 +1390,13 @@ def blen_read_geom_array_foreach_set_looptovert(mesh, blen_data, blen_attr, blen
     fbx_data must be an array.array"""
     # The fbx_data is mapped to vertices. To expand fbx_data to face corners, get an array of the vertex index of each
     # face corner that will then be used to index fbx_data.
-    corner_vertex_indices = MESH_ATTRIBUTE_CORNER_VERT.to_ndarray(mesh.attributes)
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_CORNER_VERT:
+        corner_vertex_indices = np.empty(len(mesh.loops), dtype=np.uintc)
+        mesh.loops.foreach_get("vertex_index", corner_vertex_indices)
+    else:
+    # COMPAT ADD END
+        corner_vertex_indices = MESH_ATTRIBUTE_CORNER_VERT.to_ndarray(mesh.attributes)
     blen_read_geom_array_foreach_set_indexed(blen_data, blen_attr, blen_dtype, fbx_data, corner_vertex_indices, stride,
                                              item_size, descr, xform)
 
@@ -1555,11 +1571,20 @@ def blen_read_geom_layer_material(fbx_obj, mesh):
     layer_id = b'Materials'
     fbx_layer_data = elem_prop_first(elem_find_first(fbx_layer, layer_id))
 
-    blen_data = MESH_ATTRIBUTE_MATERIAL_INDEX.ensure(mesh.attributes).data
     fbx_item_size = 1
-    assert(fbx_item_size == MESH_ATTRIBUTE_MATERIAL_INDEX.item_size)
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_MATERIAL_INDEX:
+        blen_data = mesh.polygons
+        blen_attr = "material_index"
+        blen_dtype = np.uintc
+    else:
+    # COMPAT ADD END
+        blen_data = MESH_ATTRIBUTE_MATERIAL_INDEX.ensure(mesh.attributes).data
+        blen_attr = MESH_ATTRIBUTE_MATERIAL_INDEX.foreach_attribute
+        blen_dtype = MESH_ATTRIBUTE_MATERIAL_INDEX.dtype
+        assert(fbx_item_size == MESH_ATTRIBUTE_MATERIAL_INDEX.item_size)
     blen_read_geom_array_mapped_polygon(
-        mesh, blen_data, MESH_ATTRIBUTE_MATERIAL_INDEX.foreach_attribute, MESH_ATTRIBUTE_MATERIAL_INDEX.dtype,
+        mesh, blen_data, blen_attr, blen_dtype,
         fbx_layer_data, None,
         fbx_layer_mapping, fbx_layer_ref,
         1, fbx_item_size, layer_id,
@@ -1585,7 +1610,14 @@ def blen_read_geom_layer_uv(fbx_obj, mesh):
                       "" % (layer_id, fbx_layer_name, mesh.name))
                 continue
 
-            blen_data = uv_lay.uv
+            # COMPAT ADD BEGIN
+            if not api_compat.HAS_UV_LAYER_UV_PROP:
+                blen_data = uv_lay.data
+                blen_attr = "uv"
+            else:
+            # COMPAT ADD END
+                blen_data = uv_lay.uv
+                blen_attr = "vector"
 
             # some valid files omit this data
             if fbx_layer_data is None:
@@ -1593,7 +1625,7 @@ def blen_read_geom_layer_uv(fbx_obj, mesh):
                 continue
 
             blen_read_geom_array_mapped_polyloop(
-                mesh, blen_data, "vector", np.single,
+                mesh, blen_data, blen_attr, np.single,
                 fbx_layer_data, fbx_layer_index,
                 fbx_layer_mapping, fbx_layer_ref,
                 2, 2, layer_id,
@@ -1601,11 +1633,17 @@ def blen_read_geom_layer_uv(fbx_obj, mesh):
 
 
 def blen_read_geom_layer_color(fbx_obj, mesh, colors_type):
-    if colors_type == 'NONE':
-        return
-    use_srgb = colors_type == 'SRGB'
-    layer_type = 'BYTE_COLOR' if use_srgb else 'FLOAT_COLOR'
-    color_prop_name = "color_srgb" if use_srgb else "color"
+    # COMPAT ADD BEGIN
+    using_color_attributes_api = api_compat.HAS_MESH_COL_ATTRS_PROP and api_compat.HAS_COL_ATTR_SRGB_PROP
+    if not using_color_attributes_api:
+        color_prop_name = "color"
+    else:
+    # COMPAT ADD END
+        if colors_type == 'NONE':
+            return
+        use_srgb = colors_type == 'SRGB'
+        layer_type = 'BYTE_COLOR' if use_srgb else 'FLOAT_COLOR'
+        color_prop_name = "color_srgb" if use_srgb else "color"
     # almost same as UVs
     for layer_id in (b'LayerElementColor',):
         for fbx_layer in elem_find_iter(fbx_obj, layer_id):
@@ -1618,7 +1656,13 @@ def blen_read_geom_layer_color(fbx_obj, mesh, colors_type):
             fbx_layer_data = elem_prop_first(elem_find_first(fbx_layer, b'Colors'))
             fbx_layer_index = elem_prop_first(elem_find_first(fbx_layer, b'ColorIndex'))
 
-            color_lay = mesh.color_attributes.new(name=fbx_layer_name, type=layer_type, domain='CORNER')
+            # COMPAT ADD BEGIN
+            if not using_color_attributes_api:
+                # Always init our new layers with full white opaque color.
+                color_lay = mesh.vertex_colors.new(name=fbx_layer_name, do_init=False)
+            else:
+            # COMPAT ADD END
+                color_lay = mesh.color_attributes.new(name=fbx_layer_name, type=layer_type, domain='CORNER')
 
             if color_lay is None:
                 print("Failed to add {%r %r} vertex color layer to %r (probably too many of them?)"
@@ -1644,7 +1688,7 @@ def blen_read_geom_layer_smooth(fbx_obj, mesh):
     fbx_layer = elem_find_first(fbx_obj, b'LayerElementSmoothing')
 
     if fbx_layer is None:
-        return
+        return False
 
     # all should be valid
     (fbx_layer_name,
@@ -1657,41 +1701,71 @@ def blen_read_geom_layer_smooth(fbx_obj, mesh):
 
     # udk has 'Direct' mapped, with no Smoothing, not sure why, but ignore these
     if fbx_layer_data is None:
-        return
+        return False
 
     if fbx_layer_mapping == b'ByEdge':
         # some models have bad edge data, we can't use this info...
         if not mesh.edges:
             print("warning skipping sharp edges data, no valid edges...")
-            return
+            return False
 
-        blen_data = MESH_ATTRIBUTE_SHARP_EDGE.ensure(mesh.attributes).data
         fbx_item_size = 1
-        assert(fbx_item_size == MESH_ATTRIBUTE_SHARP_EDGE.item_size)
+        # COMPAT ADD BEGIN
+        if not MESH_ATTRIBUTE_MATERIAL_INDEX:
+            blen_data = mesh.edges
+            blen_attr = "use_edge_sharp"
+            blen_dtype = bool
+        else:
+        # COMPAT ADD END
+            blen_data = MESH_ATTRIBUTE_SHARP_EDGE.ensure(mesh.attributes).data
+            blen_attr = MESH_ATTRIBUTE_SHARP_EDGE.foreach_attribute
+            blen_dtype = MESH_ATTRIBUTE_SHARP_EDGE.dtype
+            assert(fbx_item_size == MESH_ATTRIBUTE_SHARP_EDGE.item_size)
         blen_read_geom_array_mapped_edge(
-            mesh, blen_data, MESH_ATTRIBUTE_SHARP_EDGE.foreach_attribute, MESH_ATTRIBUTE_SHARP_EDGE.dtype,
+            mesh, blen_data, blen_attr, blen_dtype,
             fbx_layer_data, None,
             fbx_layer_mapping, fbx_layer_ref,
             1, fbx_item_size, layer_id,
             xform=np.logical_not,  # in FBX, 0 (False) is sharp, but in Blender True is sharp.
         )
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            # We only set sharp edges here, not face smoothing itself...
+            mesh.use_auto_smooth = True
+        # COMPAT ADD END
+        return False
     elif fbx_layer_mapping == b'ByPolygon':
-        sharp_face = MESH_ATTRIBUTE_SHARP_FACE.ensure(mesh.attributes)
-        blen_data = sharp_face.data
         fbx_item_size = 1
-        assert(fbx_item_size == MESH_ATTRIBUTE_SHARP_FACE.item_size)
+        # COMPAT ADD BEGIN
+        if not MESH_ATTRIBUTE_SHARP_FACE:
+            sharp_face = None
+            blen_data = mesh.polygons
+            blen_attr = "use_smooth"
+            blen_dtype = bool
+            xform = lambda s: (s != 0)
+        else:
+        # COMPAT ADD END
+            sharp_face = MESH_ATTRIBUTE_SHARP_FACE.ensure(mesh.attributes)
+            blen_data = sharp_face.data
+            blen_attr = MESH_ATTRIBUTE_SHARP_FACE.foreach_attribute
+            blen_dtype = MESH_ATTRIBUTE_SHARP_FACE.dtype
+            xform = lambda s: (s == 0)
+            assert(fbx_item_size == MESH_ATTRIBUTE_SHARP_FACE.item_size)
         sharp_face_set_successfully = blen_read_geom_array_mapped_polygon(
-            mesh, blen_data, MESH_ATTRIBUTE_SHARP_FACE.foreach_attribute, MESH_ATTRIBUTE_SHARP_FACE.dtype,
+            mesh, blen_data, blen_attr, blen_dtype,
             fbx_layer_data, None,
             fbx_layer_mapping, fbx_layer_ref,
             1, fbx_item_size, layer_id,
-            xform=lambda s: (s == 0),  # smoothgroup bitflags, treat as booleans for now
+            xform=xform,  # smoothgroup bitflags, treat as booleans for now
         )
-        if not sharp_face_set_successfully:
+        # COMPAT EDIT BEGIN
+        if not sharp_face_set_successfully and sharp_face is not None:
+        # COMPAT EDIT BEGIN
             mesh.attributes.remove(sharp_face)
+        return sharp_face_set_successfully
     else:
         print("warning layer %r mapping type unsupported: %r" % (fbx_layer.id, fbx_layer_mapping))
-
+        return False
 
 def blen_read_geom_layer_edge_crease(fbx_obj, mesh):
     fbx_layer = elem_find_first(fbx_obj, b'LayerElementEdgeCrease')
@@ -1722,9 +1796,19 @@ def blen_read_geom_layer_edge_crease(fbx_obj, mesh):
             print("warning skipping edge crease data, no valid edges...")
             return False
 
-        blen_data = mesh.edge_creases_ensure().data
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_EDGE_CREASES_4_0:
+            # NOTE: Skipping the API that briefly existed in 3.4, 3.5 and 3.6 because the original addon never did, and
+            #       I'm not sure how to ensure a layer. Would I HAVE to rely on `MESH_OT_customdata_crease_edge_add()`?
+            #       The old API was still functional then, so stick to that.
+            blen_data = mesh.edges
+            blen_attr = "crease"
+        else:
+        # COMPAT ADD END
+            blen_data = mesh.edge_creases_ensure().data
+            blen_attr = "value"
         return blen_read_geom_array_mapped_edge(
-            mesh, blen_data, "value", np.single,
+            mesh, blen_data, blen_attr, np.single,
             fbx_layer_data, None,
             fbx_layer_mapping, fbx_layer_ref,
             1, 1, layer_id,
@@ -1760,28 +1844,50 @@ def blen_read_geom_layer_normal(fbx_obj, mesh, xform=None):
     bl_norm_dtype = np.single
     item_size = 3
     # try loops, then polygons, then vertices.
-    tries = ((mesh.attributes["temp_custom_normals"].data, "Loops", False, blen_read_geom_array_mapped_polyloop),
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+        corner_blen_data = mesh.loops
+        corner_blen_attr = "normal"
+    else:
+    # COMPAT ADD END
+        corner_blen_data = mesh.attributes["temp_custom_normals"].data
+        corner_blen_attr = "vector"
+    tries = ((corner_blen_data, "Loops", False, blen_read_geom_array_mapped_polyloop),
              (mesh.polygons, "Polygons", True, blen_read_geom_array_mapped_polygon),
              (mesh.vertices, "Vertices", True, blen_read_geom_array_mapped_vert))
     for blen_data, blen_data_type, is_fake, func in tries:
         bdata = np.zeros((len(blen_data), item_size), dtype=bl_norm_dtype) if is_fake else blen_data
-        if func(mesh, bdata, "vector", bl_norm_dtype,
+        if func(mesh, bdata, corner_blen_attr, bl_norm_dtype,
                 fbx_layer_data, fbx_layer_index, fbx_layer_mapping, fbx_layer_ref, 3, item_size, layer_id, xform, True):
             if blen_data_type == "Polygons":
                 # To expand to per-loop normals, repeat each per-polygon normal by the number of loops of each polygon.
                 poly_loop_totals = np.empty(len(mesh.polygons), dtype=np.uintc)
                 mesh.polygons.foreach_get("loop_total", poly_loop_totals)
                 loop_normals = np.repeat(bdata, poly_loop_totals, axis=0)
-                mesh.attributes["temp_custom_normals"].data.foreach_set("vector", loop_normals.ravel())
+                corner_blen_data.foreach_set(corner_blen_attr, loop_normals.ravel())
             elif blen_data_type == "Vertices":
                 # We have to copy vnors to lnors! Far from elegant, but simple.
-                loop_vertex_indices = MESH_ATTRIBUTE_CORNER_VERT.to_ndarray(mesh.attributes)
-                mesh.attributes["temp_custom_normals"].data.foreach_set("vector", bdata[loop_vertex_indices].ravel())
+                # COMPAT ADD BEGIN
+                if not MESH_ATTRIBUTE_CORNER_VERT:
+                    loop_vertex_indices = np.empty(len(mesh.loops), dtype=np.uintc)
+                    mesh.loops.foreach_get("vertex_index", loop_vertex_indices)
+                else:
+                # COMPAT ADD END
+                    loop_vertex_indices = MESH_ATTRIBUTE_CORNER_VERT.to_ndarray(mesh.attributes)
+                corner_blen_data.foreach_set(corner_blen_attr, bdata[loop_vertex_indices].ravel())
             return True
 
     blen_read_geom_array_error_mapping("normal", fbx_layer_mapping)
     blen_read_geom_array_error_ref("normal", fbx_layer_ref)
     return False
+
+
+# COMPAT ADD BEGIN
+if not api_compat.HAS_CPP_NORMAL_NORMALIZATION:
+    def normalize_vecs(vectors):
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        np.divide(vectors, norms, out=vectors, where=norms != 0)
+# COMPAT ADD END
 
 
 def blen_read_geom(fbx_tmpl, fbx_obj, settings):
@@ -1802,6 +1908,13 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
     fbx_polys = elem_prop_first(elem_find_first(fbx_obj, b'PolygonVertexIndex'))
     fbx_edges = elem_prop_first(elem_find_first(fbx_obj, b'Edges'))
 
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_POSITION:
+        bl_vcos_dtype = np.single
+    else:
+    # COMPAT ADD END
+        bl_vcos_dtype = MESH_ATTRIBUTE_POSITION.dtype
+
     # The dtypes when empty don't matter, but are set to what the fbx arrays are expected to be.
     fbx_verts = parray_as_ndarray(fbx_verts) if fbx_verts else np.empty(0, dtype=data_types.ARRAY_FLOAT64)
     fbx_polys = parray_as_ndarray(fbx_polys) if fbx_polys else np.empty(0, dtype=data_types.ARRAY_INT32)
@@ -1818,19 +1931,32 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
     tot_edges = len(fbx_edges)
 
     mesh = bpy.data.meshes.new(name=elem_name_utf8)
-    attributes = mesh.attributes
+    # COMPAT EDIT BEGIN : Don't blindly access the attributes collection.
+    attributes = api_compat.HAS_MESH_ATTRIBUTES and mesh.attributes
+    # COMPAT EDIT END
 
     if tot_verts:
         if geom_mat_co is not None:
-            fbx_verts = vcos_transformed(fbx_verts, geom_mat_co, MESH_ATTRIBUTE_POSITION.dtype)
+            fbx_verts = vcos_transformed(fbx_verts, geom_mat_co, bl_vcos_dtype)
         else:
-            fbx_verts = fbx_verts.astype(MESH_ATTRIBUTE_POSITION.dtype, copy=False)
+            fbx_verts = fbx_verts.astype(bl_vcos_dtype, copy=False)
 
         mesh.vertices.add(tot_verts)
-        MESH_ATTRIBUTE_POSITION.foreach_set(attributes, fbx_verts.ravel())
+        # COMPAT ADD BEGIN
+        if not MESH_ATTRIBUTE_POSITION:
+            mesh.vertices.foreach_set("co", fbx_verts.ravel())
+        else:
+        # COMPAT ADD END
+            MESH_ATTRIBUTE_POSITION.foreach_set(attributes, fbx_verts.ravel())
 
     if tot_loops:
         bl_loop_start_dtype = np.uintc
+        # COMPAT ADD BEGIN
+        if not MESH_ATTRIBUTE_CORNER_VERT:
+            bl_loop_vertex_index_dtype = np.uintc
+        else:
+        # COMPAT ADD END
+            bl_loop_vertex_index_dtype = MESH_ATTRIBUTE_CORNER_VERT.dtype
 
         mesh.loops.add(tot_loops)
         # The end of each polygon is specified by an inverted index.
@@ -1841,8 +1967,13 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
         # Un-invert the loop ends.
         fbx_polys[fbx_loop_end_idx] ^= -1
         # Set loop vertex indices, casting to the Blender C type first for performance.
-        MESH_ATTRIBUTE_CORNER_VERT.foreach_set(
-            attributes, astype_view_signedness(fbx_polys, MESH_ATTRIBUTE_CORNER_VERT.dtype))
+        val = astype_view_signedness(fbx_polys, bl_loop_vertex_index_dtype)
+        # COMPAT ADD BEGIN
+        if not MESH_ATTRIBUTE_CORNER_VERT:
+            mesh.loops.foreach_set("vertex_index", val)
+        else:
+        # COMPAT ADD END
+            MESH_ATTRIBUTE_CORNER_VERT.foreach_set(attributes, val)
 
         poly_loop_starts = np.empty(tot_polys, dtype=bl_loop_start_dtype)
         # The first loop is always a loop start.
@@ -1852,6 +1983,17 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
 
         mesh.polygons.add(tot_polys)
         mesh.polygons.foreach_set("loop_start", poly_loop_starts)
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_POLYS_FOR_CONSISTENT_ORDER_WITH_LOOPS:
+            # 3.6 automatically infers 'loop_total' from the next poly's 'loop_start'. This isn't true for < 3.5, so in
+            # that case, it has to be done manually. For e.g.:
+            #   Let  poly_loop_starts = [0, a, b, c, d], where a < b < c < d < tot_loops
+            #   Then poly_loop_totals = [a, b-a, c-b, tot_loops-c]
+            poly_loop_totals = np.roll(poly_loop_starts, -1)
+            poly_loop_totals[-1] = tot_loops
+            poly_loop_totals[1:] -= poly_loop_starts[1:]
+            mesh.polygons.foreach_set("loop_total", poly_loop_totals)
+        # COMPAT ADD END
 
         blen_read_geom_layer_material(fbx_obj, mesh)
         blen_read_geom_layer_uv(fbx_obj, mesh)
@@ -1859,6 +2001,12 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
 
         if tot_edges:
             # edges in fact index the polygons (NOT the vertices)
+            # COMPAT ADD BEGIN
+            if not MESH_ATTRIBUTE_EDGE_VERTS:
+                bl_edge_vertex_indices_dtype = np.uintc
+            else:
+            # COMPAT ADD END
+                bl_edge_vertex_indices_dtype = MESH_ATTRIBUTE_EDGE_VERTS.dtype
 
             # The first vertex index of each edge is the vertex index of the corresponding loop in fbx_polys.
             edges_a = fbx_polys[fbx_edges]
@@ -1881,26 +2029,50 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
             # followed by the second vertex index of that same edge.
             # Stack edges_a and edges_b as individual columns like np.column_stack((edges_a, edges_b)).
             # np.concatenate is used because np.column_stack doesn't allow specifying the dtype of the returned array.
-            edges_conv = np.concatenate((edges_a.reshape(-1, 1), edges_b.reshape(-1, 1)),
-                                        axis=1, dtype=MESH_ATTRIBUTE_EDGE_VERTS.dtype, casting='unsafe')
+            arrays_to_concat = (edges_a.reshape(-1, 1), edges_b.reshape(-1, 1))
+            # COMPAT ADD BEGIN
+            if not api_compat.HAS_NUMPY_CONCATENATE_DTYPE_PARAM:
+                edges_conv = np.concatenate(arrays_to_concat, axis=1)
+                edges_conv = astype_view_signedness(edges_conv, bl_edge_vertex_indices_dtype)
+            else:
+            # COMPAT ADD END
+                edges_conv = np.concatenate(arrays_to_concat,
+                                            axis=1, dtype=bl_edge_vertex_indices_dtype, casting='unsafe')
 
             # Add the edges and set their vertex indices.
             mesh.edges.add(len(edges_conv))
             # ravel() because edges_conv must be flat and C-contiguous when passed to foreach_set.
-            MESH_ATTRIBUTE_EDGE_VERTS.foreach_set(attributes, edges_conv.ravel())
+            # COMPAT ADD BEGIN
+            if not MESH_ATTRIBUTE_EDGE_VERTS:
+                mesh.edges.foreach_set("vertices", edges_conv.ravel())
+            else:
+            # COMPAT ADD END
+                MESH_ATTRIBUTE_EDGE_VERTS.foreach_set(attributes, edges_conv.ravel())
     elif tot_edges:
         print("ERROR: No polygons, but edges exist. Ignoring the edges!")
 
     # must be after edge, face loading.
-    blen_read_geom_layer_smooth(fbx_obj, mesh)
+    face_smoothing_was_set = blen_read_geom_layer_smooth(fbx_obj, mesh)
+    # COMPAT ADD BEGIN
+    if not face_smoothing_was_set and not MESH_ATTRIBUTE_SHARP_FACE:
+        # Before the 'sharp_face' attrib existed, `use_smooth = False` by default, so it has to be set here explicitly.
+        # NOTE: Weirdly, they *still* say that in the modern docs, even though that's not the case anymore.
+        mesh.polygons.foreach_set("use_smooth", np.full(len(mesh.polygons), True, dtype=bool))
+        face_smoothing_was_set = True
+    # COMPAT ADD END
 
-    blen_read_geom_layer_edge_crease(fbx_obj, mesh)
+    ok_crease = blen_read_geom_layer_edge_crease(fbx_obj, mesh)
 
     ok_normals = False
     if settings.use_custom_normals:
         # Note: we store 'temp' normals in loops, since validate() may alter final mesh,
         #       we can only set custom lnors *after* calling it.
-        mesh.attributes.new("temp_custom_normals", 'FLOAT_VECTOR', 'CORNER')
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            mesh.create_normals_split()
+        else:
+        # COMPAT ADD END
+            mesh.attributes.new("temp_custom_normals", 'FLOAT_VECTOR', 'CORNER')
         if geom_mat_no is None:
             ok_normals = blen_read_geom_layer_normal(fbx_obj, mesh)
         else:
@@ -1912,13 +2084,59 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
     if ok_normals:
         bl_nors_dtype = np.single
         clnors = np.empty(len(mesh.loops) * 3, dtype=bl_nors_dtype)
-        mesh.attributes["temp_custom_normals"].data.foreach_get("vector", clnors)
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            mesh.loops.foreach_get("normal", clnors)
+        else:
+        # COMPAT ADD END
+            mesh.attributes["temp_custom_normals"].data.foreach_get("vector", clnors)
+
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_CPP_NORMAL_NORMALIZATION:
+            clnors = clnors.reshape(len(mesh.loops), 3)
+            normalize_vecs(clnors)
+            clnors = clnors.reshape(len(mesh.loops) * 3)
+        # COMPAT ADD END
 
         # Iterating clnors into a nested tuple first is faster than passing clnors.reshape(-1, 3) directly into
         # normals_split_custom_set. We use clnors.data since it is a memoryview, which is faster to iterate than clnors.
         mesh.normals_split_custom_set(tuple(zip(*(iter(clnors.data),) * 3)))
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            # NOTE: Probably not necessary, but nice to have if the user then chooses to remove custom normals.
+            mesh.use_auto_smooth = True
+            # NOTE: This wasn't part of the original addon, but considering there's no such thing as a smoothing angle
+            #       in FBX, then the feature probably shouldn't be active when imported in Blender. Though, it isn't
+            #       possible to have sharp edges
+            mesh.auto_smooth_angle = 180
+        # COMPAT ADD END
+    # COMPAT ADD BEGIN
+    elif not api_compat.HAS_REMOVED_MESH_CALC_NORMALS_FUNC:
+        mesh.calc_normals()
+    # COMPAT ADD END
+
     if settings.use_custom_normals:
-        mesh.attributes.remove(mesh.attributes["temp_custom_normals"])
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            mesh.free_normals_split()
+        else:
+        # COMPAT ADD END
+            mesh.attributes.remove(mesh.attributes["temp_custom_normals"])
+
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_REFACTORED_EDGE_CREASES_3_4 and ok_crease:
+    # COMPAT ADD END
+        mesh.use_customdata_edge_crease = True
+
+    # COMPAT ADD BEGIN : In vers < 4.1, having sharp edges required having auto-smoothing on, so it had to enable it.
+    #                    But due to what seems like an oversight, the angle was kept at the default 30, which in many
+    #                    cases used to make more visually sharp edges than it was supposed to.
+    #                    In vers >= 4.1, auto-smoothing (now a modifier) is no longer necessary for sharp edges, which
+    #                    implicitly fixes this issue.
+    #                    So, in older vers, set the angle to 180 to get the same behaviour.
+    if not api_compat.HAS_REFACTORED_MESH_SMOOTHING and mesh.use_auto_smooth:
+        mesh.auto_smooth_angle = 180
+    # COMPAT ADD END
 
     if settings.use_custom_props:
         blen_read_custom_properties(fbx_obj, mesh, settings)
@@ -1931,7 +2149,14 @@ def blen_read_shapes(fbx_tmpl, fbx_data, objects, me, scene):
         # No shape key data. Nothing to do.
         return
 
-    me_vcos = MESH_ATTRIBUTE_POSITION.to_ndarray(me.attributes)
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_POSITION:
+        bl_vcos_dtype = np.single
+        me_vcos = np.empty(len(me.vertices) * 3, dtype=bl_vcos_dtype)
+        me.vertices.foreach_get("co", me_vcos)
+    else:
+    # COMPAT ADD END
+        me_vcos = MESH_ATTRIBUTE_POSITION.to_ndarray(me.attributes)
     me_vcos_vector_view = me_vcos.reshape(-1, 3)
 
     objects = list({node.bl_obj for node in objects})
@@ -2009,7 +2234,12 @@ def blen_read_shapes(fbx_tmpl, fbx_data, objects, me, scene):
         if dvcos.any():
             shape_cos = me_vcos_vector_view.copy()
             shape_cos[indices] += dvcos
-            kb.points.foreach_set("co", shape_cos.ravel())
+            # COMPAT ADD BEGIN
+            if not api_compat.HAS_SHAPEKEY_POINTS_PROP:
+                kb.data.foreach_set("co", shape_cos.ravel())
+            else:
+            # COMPAT ADD END
+                kb.points.foreach_set("co", shape_cos.ravel())
 
         shape_key_values_in_range &= expand_shape_key_range(kb, weight)
 
@@ -2084,8 +2314,16 @@ def blen_read_material(fbx_tmpl, fbx_obj, settings):
     # elem_props_get_color_rgb(fbx_props, b'ReflectionColor', const_color_white)
     ma_wrap.normalmap_strength = elem_props_get_number(fbx_props, b'BumpFactor', 1.0)
     # Emission strength and color
-    ma_wrap.emission_strength = elem_props_get_number(fbx_props, b'EmissiveFactor', 1.0)
-    ma_wrap.emission_color = elem_props_get_color_rgb(fbx_props, b'EmissiveColor', const_color_black)
+    emission_factor = elem_props_get_number(fbx_props, b'EmissiveFactor', 1.0)
+    emission_color = elem_props_get_color_rgb(fbx_props, b'EmissiveColor', const_color_black)
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_BSDF_EMISSION_STRENGTH:
+        # For emission color we can take into account the factor, but only for default values, not in case of texture.
+        emission_color = [emission_factor * c for c in emission_color]
+    else:
+    # COMPAT ADD END
+        ma_wrap.emission_strength = emission_factor
+    ma_wrap.emission_color = emission_color
 
     nodal_material_wrap_map[ma] = ma_wrap
 
@@ -3658,11 +3896,14 @@ def load(operator, context, filepath="",
                             mod = parent.bl_obj.modifiers.new('subsurf', 'SUBSURF')
                             mod.levels = preview_levels
                             mod.render_levels = render_levels
-                            boundary_rule = elem_prop_first(elem_find_first(fbx_sdata, b'BoundaryRule'), default=1)
-                            if boundary_rule == 1:
-                                mod.boundary_smooth = "PRESERVE_CORNERS"
-                            else:
-                                mod.boundary_smooth = "ALL"
+                            # COMPAT ADD BEGIN
+                            if api_compat.HAS_SUBSURF_BOUNDARY_SMOOTH:
+                            # COMPAT ADD END
+                                boundary_rule = elem_prop_first(elem_find_first(fbx_sdata, b'BoundaryRule'), default=1)
+                                if boundary_rule == 1:
+                                    mod.boundary_smooth = "PRESERVE_CORNERS"
+                                else:
+                                    mod.boundary_smooth = "ALL"
 
         _()
         del _
@@ -3677,11 +3918,18 @@ def load(operator, context, filepath="",
             fbx_ktime = FBX_KTIME_V8 if version >= 8000 else FBX_KTIME_V7
             # Try to find the value of the nested elem_root->'FBXHeaderExtension'->'OtherFlags'->'TCDefinition' element
             # and look up the "ktimes" per second for its value.
-            if header := elem_find_first(elem_root, b'FBXHeaderExtension'):
+            # COMPAT EDIT BEGIN : Removed use of the := ("walrus") operator (see: fbx_api_compat.HAS_PY_WALRUS).
+            header = elem_find_first(elem_root, b'FBXHeaderExtension')
+            if header:
+            # COMPAT EDIT END
                 # The header version that added TCDefinition support is 1004.
                 if elem_prop_first(elem_find_first(header, b'FBXHeaderVersion'), default=0) >= 1004:
-                    if other_flags := elem_find_first(header, b'OtherFlags'):
-                        if timecode_definition := elem_find_first(other_flags, b'TCDefinition'):
+                    # COMPAT EDIT BEGIN : Removed use of the := ("walrus") operator (see: fbx_api_compat.HAS_PY_WALRUS).
+                    other_flags = elem_find_first(header, b'OtherFlags')
+                    if other_flags:
+                        timecode_definition = elem_find_first(other_flags, b'TCDefinition')
+                        if timecode_definition:
+                    # COMPAT EDIT END
                             timecode_definition_value = elem_prop_first(timecode_definition)
                             # If its value is unknown or missing, default to FBX_KTIME_V8.
                             fbx_ktime = FBX_TIMECODE_DEFINITION_TO_KTIME_PER_SECOND.get(timecode_definition_value,
@@ -3951,7 +4199,9 @@ def load(operator, context, filepath="",
                     elif lnk_type in {b'EmissiveColor'}:
                         ma_wrap.emission_color_texture.image = image
                         texture_mapping_set(fbx_lnk, ma_wrap.emission_color_texture)
-                    elif lnk_type in {b'EmissiveFactor'}:
+                    # COMPAT EDIT BEGIN
+                    elif lnk_type in {b'EmissiveFactor'} and api_compat.HAS_BSDF_EMISSION_STRENGTH:
+                    # COMPAT EDIT END
                         ma_wrap.emission_strength_texture.image = image
                         texture_mapping_set(fbx_lnk, ma_wrap.emission_strength_texture)
                     else:
@@ -4003,18 +4253,40 @@ def load(operator, context, filepath="",
                     if decal_offset != 0.0 and num_verts > 0:
                         for material in mesh.materials:
                             if material in material_decals:
+                                # COMPAT ADD BEGIN
+                                if not MESH_ATTRIBUTE_POSITION:
+                                    blen_cos_dtype = np.single
+                                    vcos = np.empty(num_verts * 3, dtype=blen_cos_dtype)
+                                    mesh.vertices.foreach_get("co", vcos)
+                                else:
+                                # COMPAT ADD END
+                                    vcos = MESH_ATTRIBUTE_POSITION.to_ndarray(mesh.attributes)
                                 blen_norm_dtype = np.single
-                                vcos = MESH_ATTRIBUTE_POSITION.to_ndarray(mesh.attributes)
                                 vnorm = np.empty(num_verts * 3, dtype=blen_norm_dtype)
-                                mesh.vertex_normals.foreach_get("vector", vnorm)
+                                # COMPAT ADD BEGIN
+                                if not HAS_VRTX_AND_PLGN_NORM_ARRAYS:
+                                    mesh.vertices.foreach_get("normal", vnorm)
+                                else:
+                                # COMPAT ADD END
+                                    mesh.vertex_normals.foreach_get("vector", vnorm)
 
                                 vcos += vnorm * decal_offset
 
-                                MESH_ATTRIBUTE_POSITION.foreach_set(mesh.attributes, vcos)
+                                # COMPAT ADD BEGIN
+                                if not MESH_ATTRIBUTE_POSITION:
+                                    mesh.vertices.foreach_set("co", vcos)
+                                else:
+                                # COMPAT ADD END
+                                    MESH_ATTRIBUTE_POSITION.foreach_set(mesh.attributes, vcos)
                                 break
 
                     for obj in (obj for obj in bpy.data.objects if obj.data == mesh):
-                        obj.visible_shadow = False
+                        # COMPAT ADD BEGIN
+                        if not api_compat.HAS_REFACTORED_VISIBLE_FLAGS:
+                            obj.cycles_visibility.shadow = False
+                        else:
+                        # COMPAT ADD END
+                            obj.visible_shadow = False
     _()
     del _
 

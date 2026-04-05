@@ -1,8 +1,3 @@
-#!/usr/bin/env python3
-# SPDX-FileCopyrightText: 2014-2023 Blender Foundation
-#
-# SPDX-License-Identifier: GPL-2.0-or-later
-
 """
 Usage
 =====
