@@ -1,2 +1,2 @@
-**/*.zip
-.vscode/settings.json
+out/
+.vscode/

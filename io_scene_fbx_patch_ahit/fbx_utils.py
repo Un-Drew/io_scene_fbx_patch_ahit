@@ -250,40 +250,8 @@ def units_convertor_iter(u_from, u_to):
     return convertor
 
 
-def matrix4_to_array(mat, double_precision=False):
+def matrix4_to_array(mat):
     """Concatenate matrix's columns into a single, flat tuple"""
-    # UnDrew Add Start
-    """
-    Instead of using the matrix as-is, decompose, then recompose it manually with *python floats*
-
-    As of right now, with the current built-in FBX exporter, it's possible for some matrices to
-    get interpreted incorrectly by the FBX SDK (most FBX-supporting programs out there use it).
-    My only guess as to why this happens is because Blender matrices use 4-byte floats as its
-    values, while FBX expects them to be doubles, which are 8 bytes. If the SDK is not equipped
-    to deal with the RARE imprecisions this creates, stuff inexplicably breaks. Just speculating,
-    though, because, of course, they had to make it closed-source :D
-
-    Because python's floats do use doubles internally (8 bytes), build this matrix manually,
-    using built-in operations, to minimise the amount of precision errors, and to make sure the
-    resulting matrix accurately represents a valid pair of loc, rot, scale!
-    """
-    if double_precision:
-        l, r, s = mat.decompose()
-        r = r.to_euler('XYZ') # Note: Unsure if this axis order is right. Oh well!
-        sin_x = math.sin(r.x)
-        cos_x = math.cos(r.x)
-        sin_y = math.sin(r.y)
-        cos_y = math.cos(r.y)
-        sin_z = math.sin(r.z)
-        cos_z = math.cos(r.z)
-        # Because the matrix needs to be transposed, I'm writing it as such directly.
-        return (
-            s.x * (cos_y * cos_z)                        ,  s.x * (cos_y * sin_z)                        ,  s.x * (-sin_y),         0.0,  # column 0
-            s.y * (sin_x * sin_y * cos_z - cos_x * sin_z),  s.y * (sin_x * sin_y * sin_z + cos_x * cos_z),  s.y * (sin_x * cos_y),  0.0,  # column 1
-            s.z * (cos_x * sin_y * cos_z + sin_x * sin_z),  s.z * (cos_x * sin_y * sin_z - sin_x * cos_z),  s.z * (cos_x * cos_y),  0.0,  # column 2
-            l.x                                          ,  l.y                                          ,  l.z                  ,  1.0   # column 3
-        )
-    # UnDrew Add End
     # blender matrix is row major, fbx is col major so transpose on write
     return tuple(f for v in mat.transposed() for f in v)
 
@@ -1613,10 +1581,6 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
     """
     __slots__ = (
         'name', 'key', 'bdata', 'parented_to_armature', 'override_materials',
-        # UnDrew Add Start : Matrices for applying scale transforms to the armature.
-        "UE3_is_empty", "UE3_empty_chain_parent", "UE3_empty_chain_offset_matrix",
-        "UE3_empty_chain_scale_matrix", "UE3_empty_chain_scale_matrix_inv",
-        # UnDrew Add End
         '_tag', '_ref', '_dupli_matrix'
     )
 
@@ -1672,9 +1636,6 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
             self._ref = armature
         self.parented_to_armature = False
         self.override_materials = None
-        # UnDrew Add Start : This has to be initialized somewhere...
-        self.UE3_is_empty = False
-        # UnDrew Add End
 
     def __eq__(self, other):
         return isinstance(other, self.__class__) and self.key == other.key
@@ -1728,44 +1689,6 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         else:  # 'BO', current pose
             # PoseBone.matrix is in armature space, bring in back in real local one!
             par = self.bdata.parent
-            # UnDrew Add Start : Deliberate support for other scale inheritance modes.
-            if par and self.inherit_type != 1:  # != RSrs
-                pbone = self._ref.pose.bones[self.bdata.name]
-                saved_pose_matrix = pbone.matrix.copy()  # Copy doesn't seem necessary, but better safe than sorry!
-
-                # So, for this case, I'm using a dedicated function for space conversions, which does it properly depending on
-                # the current bone settings. This function, unfortunately, works TOO WELL, because it also accounts for when
-                # the Local Location or Inherit Rotation bone settings are disabled, which isn't really desired here.
-                # Therefore, temporarily set those to True while converting.
-                # This seemingly has a bit of a cost (some update it runs?), but it isn't too dramatic, even in stress-tests.
-                #
-                # P.S.: Okay, so I probably coooouuuld figure how to mathematically account for those settings myself without
-                # having to toggle them, but I honestly can't be bothered. And tbh, this is more maintainable.
-                no_local_location = not self.bdata.use_local_location
-                no_inherit_rotation = not self.bdata.use_inherit_rotation
-                if no_local_location:
-                    self.bdata.use_local_location = True
-                if no_inherit_rotation:
-                    self.bdata.use_inherit_rotation = True
-
-                # Now convert Pose (in "global" armature space) to Local (in rest-relative space), and then
-                # convert THAT to parent-relative. Very confusing!
-                r = self.matrix_rest_local @ self.bdata.convert_local_to_pose(
-                    saved_pose_matrix,
-                    pbone.bone.matrix_local,
-                    parent_matrix=pbone.parent.matrix,
-                    parent_matrix_local=pbone.parent.bone.matrix_local,
-                    invert=True  # Invert means Pose to Local, not the default which is Local to Pose.
-                )
-
-                # Restore any changed settings.
-                if no_local_location:
-                    self.bdata.use_local_location = False
-                if no_inherit_rotation:
-                    self.bdata.use_inherit_rotation = False
-
-                return r
-            # UnDrew Add End
             par_mat_inv = self._ref.pose.bones[par.name].matrix.inverted_safe() if par else Matrix()
             return par_mat_inv @ self._ref.pose.bones[self.bdata.name].matrix
     matrix_local = property(get_matrix_local)
@@ -1795,23 +1718,6 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         else:
             return self.matrix_global.copy()
     matrix_rest_global = property(get_matrix_rest_global)
-
-    # UnDrew Add Start : InheritType support. AHiT only seems to natively support RrSs (i.e. ALIGNED inheritance).
-    # TODO: This is not accurate when there's different inherit_scales in the same armature. Oh well!
-    def get_inherit_type(self):
-        if self.is_bone:
-            inherit_scale = self.bdata.inherit_scale
-            if inherit_scale in {'NONE', 'NONE_LEGACY'}:
-                return 2  # Rrs
-            elif inherit_scale == 'ALIGNED':
-                return 0  # RrSs
-            else:
-                return 1  # RSrs
-        else:
-            # TODO: See if regular objects have their own scale inheritance properties.
-            return 1  # RSrs
-    inherit_type = property(get_inherit_type)
-    # UnDrew Add End
 
     # #### Transform and helpers
     def has_valid_parent(self, objects):
@@ -1857,31 +1763,6 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         matrix = self.matrix_rest_local if rest else self.matrix_local
         parent = self.parent
 
-        # UnDrew Add Start : Handle any empty chain transforms. Empties should have zero-influence
-        # over their children, the children being responsible for applying those transforms instead.
-        # In the case where an empty was at the scene root, the global matrix needs to be split up.
-        # The global scale is applied to the "new" root, the axis transform remains in the old root.
-        # For whatever reason, putting the entire global matrix in the new root breaks the orientation
-        # in animations. Don't ask me why, but splitting it up like this Works(tm).
-        if scene_data.settings.UE3_dont_add_armature_bone:
-            use_only_global_scale = False
-            if self.UE3_is_empty:
-                if is_global:
-                    if self.UE3_empty_chain_parent:
-                        return self.UE3_empty_chain_parent.fbx_object_matrix(scene_data, rest=rest, global_space=True)
-                    else:
-                        return scene_data.settings.UE3_global_matrix_no_scale
-                else:
-                    return Matrix.Identity(4)
-            elif parent and parent.UE3_is_empty:
-                matrix = parent.UE3_empty_chain_offset_matrix @ matrix
-                # Very important to set this, so we can pretend the empty chain between us and this parent doesn't exist.
-                parent = parent.UE3_empty_chain_parent
-                if not parent and not is_global and not local_space:
-                    is_global = True
-                    use_only_global_scale = True
-        # UnDrew Add End
-
         # Bones, lamps and cameras need to be rotated (in local space!).
         if self._tag == 'BO':
             # If we have a bone parent we need to undo the parent correction.
@@ -1901,22 +1782,6 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
                 # Have to bring it back into bone root, which is FBX expected value.
                 matrix = Matrix.Translation((0, (parent.bdata.tail - parent.bdata.head).length, 0)) @ matrix
 
-        # UnDrew Add Start : Apply scale to bone translation instead of keeping the scale in the
-        # bone's matrix. This is for backwards compatibility with blender. Objects parented to
-        # bones eventually get the proper scale applied.
-        if scene_data.settings.UE3_dont_add_armature_bone:
-            # Only scale up the translation in local space. Global space does that already.
-            if not is_global and parent and parent._tag == 'BO':
-                armature = parent.armature
-                if armature and armature.UE3_is_empty:
-                    matrix = armature.UE3_empty_chain_scale_matrix @ matrix
-            # Either way, cancel out the scale component from the matrix, that shouldn't be there.
-            if self._tag == 'BO':
-                armature = self.armature
-                if armature and armature.UE3_is_empty:
-                    matrix = matrix @ armature.UE3_empty_chain_scale_matrix_inv
-        # UnDrew Add End
-
         # Our matrix is in local space, time to bring it in its final desired space.
         if parent:
             if is_global:
@@ -1934,13 +1799,6 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
             # If we bake the transforms we need to post-multiply inverse global transform.
             # This means that the global transform will not apply to children of this transform.
             matrix = matrix @ scene_data.settings.global_matrix_inv
-
-        # UnDrew Add Start : From the global matrix, ONLY use the scale (when appropriate).
-        if scene_data.settings.UE3_dont_add_armature_bone and is_global and use_only_global_scale:
-            matrix = Matrix.Scale(scene_data.settings.global_scale, 4) @ matrix
-            return matrix
-        # UnDrew Add End
-
         if is_global:
             # In any case, pre-multiply the global matrix to get it in FBX global space!
             matrix = scene_data.settings.global_matrix @ matrix
@@ -2037,13 +1895,6 @@ FBXExportSettings = namedtuple("FBXExportSettings", (
     "context_objects", "object_types", "use_mesh_modifiers", "use_mesh_modifiers_render",
     "mesh_smooth_type", "use_subsurf", "use_mesh_edges", "use_tspace", "use_triangles",
     "armature_nodetype", "use_armature_deform_only", "add_leaf_bones",
-    # UnDrew Add Start : New settings that need to be passed to the exporter's "settings" var.
-    "UE3_dont_add_armature_bone", "UE3_matrix_double_precision",
-    "UE3_rest_default_pose", "UE3_remove_anim_object_prefix", "UE3_nla_modular_anim_support", "UE3_nla_only_animate_owner", "UE3_nla_force_export",
-    # UnDrew Add End
-    # UnDrew Add Start : Not settings, but should be held here for performance reasons.
-    "UE3_global_matrix_no_scale",
-    # UnDrew Add End
     "bone_correction_matrix", "bone_correction_matrix_inv",
     "bake_anim", "bake_anim_use_all_bones", "bake_anim_use_nla_strips", "bake_anim_use_all_actions",
     "bake_anim_step", "bake_anim_simplify_factor", "bake_anim_force_startend_keying",
@@ -2076,8 +1927,5 @@ FBXImportSettings = namedtuple("FBXImportSettings", (
     "use_custom_props", "use_custom_props_enum_as_string",
     "nodal_material_wrap_map", "image_cache",
     "ignore_leaf_bones", "force_connect_children", "automatic_bone_orientation", "bone_correction_matrix",
-    # UnDrew Add Start : New settings that need to be passed to the importer's "settings" var.
-    "UE3_import_root_as_bone", "UE3_import_scale_inheritance", "UE3_connect_children",
-    # UnDrew Add End
     "use_prepost_rot", "colors_type",
 ))

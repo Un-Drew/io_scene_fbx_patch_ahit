@@ -2,20 +2,18 @@
 #
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-# UnDrew Edit Start : Differentiate from the base add-on.
 bl_info = {
-    "name": "FBX format - AHiT patch",
-    "author": "Original add-on by: Campbell Barton, Bastien Montagne, Jens Restemeier, @Mysteryem. Modified by: UnDrew",
-    "version": (4, 3, 1),
-    "blender": (4, 3, 0),
+    "name": "FBX format",
+    "author": "Campbell Barton, Bastien Montagne, Jens Restemeier, @Mysteryem",
+    "version": (5, 12, 5),
+    "blender": (4, 2, 0),
     "location": "File > Import-Export",
-    "description": "Modified FBX add-on; fixes some compatibility issues with AHiT",
+    "description": "FBX IO meshes, UVs, vertex colors, materials, textures, cameras, lamps and actions",
     "warning": "",
-    "doc_url": "https://github.com/Un-Drew/io_scene_fbx_patch_ahit",
-    "support": 'COMMUNITY',
+    "doc_url": "{BLENDER_MANUAL_URL}/addons/import_export/scene_fbx.html",
+    "support": 'OFFICIAL',
     "category": "Import-Export",
 }
-# UnDrew Edit End
 
 
 if "bpy" in locals():
@@ -46,48 +44,11 @@ from bpy_extras.io_utils import (
 )
 
 
-# UnDrew Add Start : PATCH DEFAULTS
-
-# For vanilla behaviour, change this one to False
-DEF_IMPORT_ROOT_AS_BONE = True
-# For vanilla behaviour, change this one to False
-DEF_IMPORT_SCALE_INHERITANCE = True
-# For vanilla behaviour, change this one to True
-DEF_IMPORT_CONNECT_CHILDREN = False
-# For vanilla behaviour, change this one to 'ALWAYS'
-DEF_IMPORT_FPS_RULE = 'IF_FOUND'
-# For vanilla behaviour, change this one to False
-DEF_IMPORT_CUSTOM_FPS_FIX = True
-# For vanilla behaviour, change this one to False
-DEF_IMPORT_ACTION_DOMAIN = True
-
-# For vanilla behaviour, change this one to False
-DEF_EXPORT_DONT_ADD_ARMATURE_BONE = True
-# For vanilla behaviour, change this one to False
-DEF_EXPORT_MATRIX_DOUBLE_PRECISION = False
-# For vanilla behaviour, change this one to False
-DEF_EXPORT_NLA_MODULAR_ANIM_SUPPORT = False
-# For vanilla behaviour, change this one to False
-DEF_EXPORT_NLA_FORCE_EXPORT = False
-# For vanilla behaviour, change this one to False
-DEF_EXPORT_NLA_ONLY_ANIMATE_OWNER = True
-# For vanilla behaviour, change this one to False
-DEF_EXPORT_REST_DEFAULT_POSE = True
-# For vanilla behaviour, change this one to False
-DEF_EXPORT_REMOVE_ANIM_OBJECT_PREFIX = True
-# For vanilla behaviour, change this one to True
-DEF_EXPORT_ADD_LEAF_BONES = False
-
-# UnDrew Add End
-
-
 @orientation_helper(axis_forward='-Z', axis_up='Y')
 class ImportFBX(bpy.types.Operator, ImportHelper):
-    # UnDrew Edit Start : Avoid conflicts + custom tooltip.
-    """Load a FBX file, using the patched importer"""
-    bl_idname = "import_scene.fbx_patch_ahit"
-    # UnDrew Edit End
-    bl_label = "Import FBX - AHiT"  # UnDrew Edit : Clarity, especially with drag-n-drop support.
+    """Load a FBX file"""
+    bl_idname = "import_scene.fbx"
+    bl_label = "Import FBX"
     bl_options = {'UNDO', 'PRESET'}
 
     directory: StringProperty()
@@ -169,32 +130,6 @@ class ImportFBX(bpy.types.Operator, ImportHelper):
         description="Offset to apply to animation during import, in frames",
         default=1.0,
     )
-    # UnDrew Add Start : A way to skip importing the FPS.
-    UE3_fps_import_rule: EnumProperty(
-        name="UE3 - FPS import rule",
-        items=(('ALWAYS', "Always import", "Vanilla behaviour - Always sets the FPS, defauts to 25 when not found"),
-               ('IF_FOUND', "Only if found", "Only sets the FPS if it's defined in the FBX file, otherwise the existing one remains"),
-               ('NEVER', "Never import", "Never imports or sets the FPS, so the existing one remains"),
-               ),
-        description="Defines in what situations should the FPS be imported and overwritten",
-        default=DEF_IMPORT_FPS_RULE,
-    )
-    # UnDrew Add End
-    # UnDrew Add Start : Time dilation fix when using Custom FPS.
-    UE3_custom_fps_fix: BoolProperty(
-        name="UE3 - Custom FPS fix",
-        description="Fixes an oversight where the Base part of a custom frame rate would get ignored when importing animations",
-        default=DEF_IMPORT_CUSTOM_FPS_FIX,
-    )
-    # UnDrew Add End
-    # UnDrew Add Start : Fix for actions being created without initializing their id_root.
-    UE3_set_action_id_root: BoolProperty(
-        name="UE3 - Set action domains",
-        description="Automatically makes imported actions only appear on the relevant Object/ID types. "
-                    "Useful to avoid accidently locking an action to the wrong type later down the line",
-        default=DEF_IMPORT_ACTION_DOMAIN,
-    )
-    # UnDrew Add End
 
     use_subsurf: BoolProperty(
         name="Subdivision Data",
@@ -218,29 +153,6 @@ class ImportFBX(bpy.types.Operator, ImportHelper):
         description="Ignore the last bone at the end of each chain (used to mark the length of the previous bone)",
         default=False,
     )
-    # UnDrew Add Start : Fix for Blender interpreting the root bone as the Armature.
-    UE3_import_root_as_bone: BoolProperty(
-        name="UE3 - Import Root as Bone",
-        description="If enabled, the root bone is preserved for models exported from Unreal",
-        default=DEF_IMPORT_ROOT_AS_BONE,
-    )
-    # UnDrew Add End
-    # UnDrew Add Start : Support for importing scale inheritance (per-bone Inherit Scale property).
-    UE3_import_scale_inheritance: BoolProperty(
-        name="UE3 - Import Scale Inheritance",
-        description="If enabled, the per-bone Inherit Scale property is correctly imported (AHiT always uses 'Aligned')",
-        default=DEF_IMPORT_SCALE_INHERITANCE,
-    )
-    # UnDrew Add End
-    # UnDrew Add Start : Option to toggle whether to try connecting bones on import.
-    UE3_connect_children: BoolProperty(
-        name="UE3 - Connect Children",
-        description="If disabled, don't attempt to connect bones at all. "
-                    "If enabled (vanilla), connect child bones if their position matches the parent's tail "
-                    "(Note this can break translation animation sometimes)",
-        default=DEF_IMPORT_CONNECT_CHILDREN,
-    )
-    # UnDrew Add End
     force_connect_children: BoolProperty(
         name="Force Connect Children",
         description="Force connection of children bones to their parent, even if their computed head/tail "
@@ -359,15 +271,6 @@ def import_panel_animation(layout, operator):
     if body:
         body.enabled = operator.use_anim
         body.prop(operator, "anim_offset")
-        # UnDrew Add Start : A way to skip importing the FPS.
-        body.prop(operator, "UE3_fps_import_rule")
-        # UnDrew Add End
-        # UnDrew Add Start : Time dilation fix when using Custom FPS.
-        body.prop(operator, "UE3_custom_fps_fix")
-        # UnDrew Add End
-        # UnDrew Add Start : Fix for actions being created without initializing their id_root.
-        body.prop(operator, "UE3_set_action_id_root")
-        # UnDrew Add End
 
 
 def import_panel_armature(layout, operator):
@@ -375,30 +278,19 @@ def import_panel_armature(layout, operator):
     header.label(text="Armature")
     if body:
         body.prop(operator, "ignore_leaf_bones")
-        # UnDrew Add Start : Option to toggle whether to try connecting bones on import.
-        body.prop(operator, "UE3_connect_children")
-        # UnDrew Add End
         body.prop(operator, "force_connect_children"),
         body.prop(operator, "automatic_bone_orientation"),
         sub = body.column()
         sub.enabled = not operator.automatic_bone_orientation
         sub.prop(operator, "primary_bone_axis")
         sub.prop(operator, "secondary_bone_axis")
-        # UnDrew Add Start : Fix for Blender interpreting the root bone as the Armature.
-        body.prop(operator, "UE3_import_root_as_bone")
-        # UnDrew Add End
-        # UnDrew Add Start : Support for importing scale inheritance (per-bone Inherit Scale property).
-        body.prop(operator, "UE3_import_scale_inheritance")
-        # UnDrew Add End
 
 
 @orientation_helper(axis_forward='-Z', axis_up='Y')
 class ExportFBX(bpy.types.Operator, ExportHelper):
-    # UnDrew Edit Start : Avoid conflicts + custom tooltip.
-    """Write a FBX file, using the patched exporter"""
-    bl_idname = "export_scene.fbx_patch_ahit"
-    # UnDrew Edit End
-    bl_label = "Export FBX - AHiT"  # UnDrew Edit : Clarity.
+    """Write a FBX file"""
+    bl_idname = "export_scene.fbx"
+    bl_label = "Export FBX"
     bl_options = {'UNDO', 'PRESET'}
 
     filename_ext = ".fbx"
@@ -550,27 +442,8 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
         name="Add Leaf Bones",
         description="Append a final bone to the end of each chain to specify last bone length "
         "(use this when you intend to edit the armature from exported data)",
-        # UnDrew Edit Start : This is dumb and should be off by default :)
-        default=DEF_EXPORT_ADD_LEAF_BONES # False for commit!
-        # UnDrew Edit End
+        default=True  # False for commit!
     )
-    # UnDrew Add Start : Fix for Blender adding an extra root bone with the name of the Armature.
-    UE3_dont_add_armature_bone: BoolProperty(
-        name="UE3 - Don't Add Armature Bone",
-        description="If enabled, armatures won't gain an extra root bone when imported into Unreal. "
-                    "Necessary when creating models/animations for an existing skeletal structure",
-        default=DEF_EXPORT_DONT_ADD_ARMATURE_BONE,
-    )
-    # UnDrew Add End
-    # UnDrew Add Start : Matrix double precision.
-    UE3_matrix_double_precision: BoolProperty(
-        name="UE3 - Matrix Double Precision",
-        description="Sometimes, bone rotations exported from Blender may look incorrect in other apps, likely "
-                    "due to floating point precision issues. This setting exists to rebuild bone matrices using "
-                    "double precision. This *may* fix that issue, although it's highly experimental!",
-        default=DEF_EXPORT_MATRIX_DOUBLE_PRECISION,
-    )
-    # UnDrew Add End
     primary_bone_axis: EnumProperty(
         name="Primary Bone Axis",
         items=(('X', "X Axis", ""),
@@ -652,67 +525,6 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
         soft_min=0.0, soft_max=10.0,
         default=1.0,  # default: min slope: 0.005, max frame step: 10.
     )
-    # UnDrew Add Start : Extended animation export properties.
-    UE3_nla_modular_anim_support: BoolProperty(
-        name="UE3 NLA - Modular Anim Support",
-        description="If disabled (vanilla), NLA is exported on a per-strip basis. "
-                    "If enabled, NLA is exported on a per-track basis, so multiple animations on the same row "
-                    "will be exported, in full, as one single animation. Plus, additive animations placed above "
-                    "will be merged down - rather than being individually exported",
-        default=DEF_EXPORT_NLA_MODULAR_ANIM_SUPPORT,
-    )
-    UE3_nla_force_export: BoolProperty(
-        name="UE3 NLA - Force Export",
-        description="If disabled (vanilla), NLA tracks which are disabled are skipped during export. "
-                    "If enabled, all NLA tracks will ALWAYS be exported",
-        default=DEF_EXPORT_NLA_FORCE_EXPORT,
-    )
-    UE3_nla_only_animate_owner: BoolProperty(
-        name="UE3 NLA - Only Animate Owner",
-        description="If disabled (vanilla), NLA animations will bake the entire exported scene - even unrelated objects, which is unnecessary. "
-                    "If enabled, these animations will only track their owner object",
-        default=DEF_EXPORT_NLA_ONLY_ANIMATE_OWNER,
-    )
-    UE3_rest_default_pose: BoolProperty(
-        name="UE3 - Rest Default Pose",
-        description="If enabled, this causes the default pose in the FBX file to use the Rest Pose of the armature. "
-                    "If disabled (vanilla), it uses the Current Pose. Enabling fixes a rare bug with AHiT, where animations "
-                    "would've imported with an incorrectly multiplied scale, depending on the playhead's position",
-        default=DEF_EXPORT_REST_DEFAULT_POSE,
-    )
-    UE3_remove_anim_object_prefix: BoolProperty(
-        name="UE3 - Remove prefix from anim names",
-        description="If enabled, this removes the object prefix from action names, which is normally added by the vanilla FBX add-on",
-        default=DEF_EXPORT_REMOVE_ANIM_OBJECT_PREFIX,
-    )
-    # UnDrew Add End
-    # UnDrew Add Start : Batch export Anims.
-    UE3_batch_anims: BoolProperty(
-        name="UE3 - Batch Export Anims",
-        description="Exports all animations as separate FBX files, instead of putting them into the main file. "
-                    "Necessary for UE3, which can't import animations from the same file with the right durations",
-        default=False,
-    )
-    UE3_batch_skip_main: BoolProperty(
-        name="Skip Main File",
-        description="Skips exporting the main file, thus only saving the animation files",
-        default=True,
-    )
-    UE3_batch_subpath: StringProperty(
-        name="Sub-folder",
-        description="The sub-folder in which the animation files will be exported. Leave this blank to export in the same folder as the main file",
-        default="Anims",
-    )
-    UE3_batch_object_filter: EnumProperty(
-        name="Object Filter",
-        items=(('ALL', "Off (All Objects)", "No object filtering is present. Any objects found in the main file will be found in the animation files as well"),
-               ('ONLY_OWNER', "Only Owner", "Each anim file only includes the object that owns said animation (usually an armature). \n"
-                                            "NOTE: May prevent the file from opening in some programs (e.g. Microsoft 3D Viewer)"),
-               ('ONLY_OWNER_AND_MESH', "Only Owner + Mesh", "Similar to 'Only Owner', but parented meshes are included as well"),
-               ),
-        default='ONLY_OWNER',
-    )
-    # UnDrew Add End
     path_mode: path_reference_mode
     embed_textures: BoolProperty(
         name="Embed Textures",
@@ -758,9 +570,6 @@ class ExportFBX(bpy.types.Operator, ExportHelper):
         export_panel_geometry(layout, self)
         export_panel_armature(layout, self)
         export_panel_animation(layout, self)
-        # UnDrew Add Start : Batch export Anims
-        export_panel_UE3_batch_anims(layout, self)
-        # UnDrew Add End
 
     @property
     def check_extension(self):
@@ -860,14 +669,6 @@ def export_panel_armature(layout, operator):
         body.prop(operator, "armature_nodetype")
         body.prop(operator, "use_armature_deform_only")
         body.prop(operator, "add_leaf_bones")
-        # UnDrew Add Start : Fix for Blender adding an extra root bone with the name of the Armature.
-        body.prop(operator, "UE3_dont_add_armature_bone")
-        # UnDrew Add End
-        # UnDrew Add Start : Matrix double precision.
-        row = body.row()
-        row.prop(operator, "UE3_matrix_double_precision")
-        row.label(text="", icon='ERROR')
-        # UnDrew Add End
 
 
 def export_panel_animation(layout, operator):
@@ -883,39 +684,13 @@ def export_panel_animation(layout, operator):
         body.prop(operator, "bake_anim_force_startend_keying")
         body.prop(operator, "bake_anim_step")
         body.prop(operator, "bake_anim_simplify_factor")
-        # UnDrew Add Start : Extended animation export properties.
-        sublayout = body.column()
-        sublayout.use_property_split = False  # These property names are pretty long, let's use all available space.
-        sublayout.prop(operator, "UE3_nla_modular_anim_support")
-        sublayout.prop(operator, "UE3_nla_force_export")
-        sublayout.prop(operator, "UE3_nla_only_animate_owner")
-        sublayout.prop(operator, "UE3_rest_default_pose")
-        sublayout.prop(operator, "UE3_remove_anim_object_prefix")
-        # UnDrew Add End
 
 
-# UnDrew Add Start : Batch export Anims
-def export_panel_UE3_batch_anims(layout, operator):
-    header, body = layout.panel("FBX_export_UE3_batch_anims", default_closed=True)
-    header.use_property_split = False
-    header.prop(operator, "UE3_batch_anims", text="")
-    header.label(text="UE3 - Batch Export Anims")
-    header.enabled = operator.bake_anim
-    if body:
-        body.enabled = operator.bake_anim and operator.UE3_batch_anims
-        body.prop(operator, "UE3_batch_skip_main")
-        body.prop(operator, "UE3_batch_subpath")
-        body.prop(operator, "UE3_batch_object_filter")
-# UnDrew Add End
-
-
-# UnDrew Edit Start : Avoid conflicts.
-class IO_FH_fbx_patch_ahit(bpy.types.FileHandler):
-# UnDrew Edit End
-    bl_idname = "IO_FH_fbx_patch_ahit"  # UnDrew Edit : Avoid conflicts.
-    bl_label = "FBX - AHiT patch"  # UnDrew Edit : Clarity.
-    bl_import_operator = "import_scene.fbx_patch_ahit"  # UnDrew Edit : Avoid conflicts.
-    bl_export_operator = "export_scene.fbx_patch_ahit"  # UnDrew Edit : Avoid conflicts.
+class IO_FH_fbx(bpy.types.FileHandler):
+    bl_idname = "IO_FH_fbx"
+    bl_label = "FBX"
+    bl_import_operator = "import_scene.fbx"
+    bl_export_operator = "export_scene.fbx"
     bl_file_extensions = ".fbx"
 
     @classmethod
@@ -924,21 +699,18 @@ class IO_FH_fbx_patch_ahit(bpy.types.FileHandler):
 
 
 def menu_func_import(self, context):
-    self.layout.operator(ImportFBX.bl_idname, text="FBX - AHiT patch (.fbx)")  # UnDrew Edit : Clarity.
+    self.layout.operator(ImportFBX.bl_idname, text="FBX (.fbx)")
 
 
 def menu_func_export(self, context):
-    self.layout.operator(ExportFBX.bl_idname, text="FBX - AHiT patch (.fbx)")  # UnDrew Edit : Clarity.
+    self.layout.operator(ExportFBX.bl_idname, text="FBX (.fbx)")
 
 
 classes = (
     ImportFBX,
     ExportFBX,
-    # UnDrew Edit Start : Avoid conflicts.
-    IO_FH_fbx_patch_ahit,
-    # UnDrew Edit End
+    IO_FH_fbx,
 )
-# UnDrew Edit End
 
 
 def register():
