@@ -1,8 +1,3 @@
-# SPDX-FileCopyrightText: 2006-2012 assimp team
-# SPDX-FileCopyrightText: 2013 Blender Foundation
-#
-# SPDX-License-Identifier: GPL-2.0-or-later
-
 BOOL = b'B'[0]
 CHAR = b'C'[0]
 INT8 = b'Z'[0]

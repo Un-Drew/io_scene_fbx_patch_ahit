@@ -1,8 +1,3 @@
-# SPDX-FileCopyrightText: 2013 Campbell Barton
-# SPDX-FileCopyrightText: 2014 Bastien Montagne
-#
-# SPDX-License-Identifier: GPL-2.0-or-later
-
 import math
 import time
 
@@ -19,6 +14,22 @@ from bpy.types import Object, Bone, PoseBone, DepsgraphObjectInstance
 from mathutils import Vector, Matrix
 
 from . import encode_bin, data_types
+
+# COMPAT ADD BEGIN
+from . import fbx_api_compat as api_compat
+# COMPAT ADD END
+
+# COMPAT ADD BEGIN
+try:
+# COMPAT ADD END
+    math_prod = math.prod
+# COMPAT ADD BEGIN : prod() was only added in Python 3.8, so it may fail importing.
+except AttributeError:
+    from functools import reduce
+    from operator import mul
+    def math_prod(iterable, *, start=1):
+        return reduce(mul, iterable, start)
+# COMPAT ADD END
 
 
 # "Constants"
@@ -510,7 +521,7 @@ def fast_first_axis_flat(ar):
     Since the dtype of the view could sort in a different order to the dtype of the input array, this isn't typically
     useful for actual sorting, but it is useful for sorting-based uniqueness, such as np.unique."""
     # If there are no rows, each element will be viewed as the new dtype.
-    elements_per_row = math.prod(ar.shape[1:])
+    elements_per_row = math_prod(ar.shape[1:])
     row_itemsize = ar.itemsize * elements_per_row
 
     # Get a dtype with itemsize that equals row_itemsize.
@@ -662,7 +673,11 @@ def expand_shape_key_range(shape_key, value_to_fit):
     The new slider_min/slider_max is rounded down/up to the nearest whole number for a more visually pleasing result.
 
     Returns whether it was possible to expand the slider range to fit `value_to_fit`."""
-    if value_to_fit < (slider_min := shape_key.slider_min):
+    # COMPAT EDIT BEGIN : Removed use of the := ("walrus") operator (see: fbx_api_compat.HAS_PY_WALRUS).
+    slider_min = shape_key.slider_min
+    slider_max = shape_key.slider_max
+    if value_to_fit < slider_min:
+    # COMPAT EDIT END
         if value_to_fit < 0.0:
             # For the most common case, set slider_min to double value_to_fit.
             target_slider_min = value_to_fit * 2.0
@@ -674,7 +689,9 @@ def expand_shape_key_range(shape_key, value_to_fit):
         shape_key.slider_min = math.floor(target_slider_min)
 
         return value_to_fit >= SHAPE_KEY_SLIDER_HARD_MIN
-    elif value_to_fit > (slider_max := shape_key.slider_max):
+    # COMPAT EDIT BEGIN : Removed use of the := ("walrus") operator (see: fbx_api_compat.HAS_PY_WALRUS).
+    elif value_to_fit > slider_max:
+    # COMPAT EDIT END
         if value_to_fit > 0.0:
             # For the most common case, set slider_max to double value_to_fit.
             target_slider_max = value_to_fit * 2.0
@@ -742,6 +759,16 @@ def attribute_to_ndarray(attribute, foreach_attribute=None):
     return ndarray
 
 
+# COMPAT ADD BEGIN
+if not api_compat.HAS_MESH_ATTRIBUTES:
+    _type_attribute_group = object
+elif not api_compat.HAS_SPECIALIZED_ATTR_GROUP_TYPES:
+    _type_attribute_group = bpy.types.AttributeGroup
+else:
+# COMPAT ADD END
+    _type_attribute_group = bpy.types.AttributeGroupMesh
+
+
 @dataclass
 class AttributeDescription:
     """Helper class to reduce duplicate code for handling built-in Blender attributes."""
@@ -752,7 +779,7 @@ class AttributeDescription:
     domain: str
     # Some attributes are required to exist if certain conditions are met. If a required attribute does not exist when
     # attempting to get it, an AssertionError is raised.
-    is_required_check: Callable[[bpy.types.AttributeGroupMesh], bool] = None
+    is_required_check: Callable[[_type_attribute_group], bool] = None
     # NumPy dtype that matches the internal C data of this attribute.
     dtype: np.dtype = field(init=False)
     # The default attribute name to use with foreach_get and foreach_set.
@@ -819,17 +846,26 @@ class AttributeDescription:
 # Built-in Blender attributes
 # Only attributes used by the importer/exporter are included here.
 # See usage of BuiltinCustomDataLayerProvider in Blender source to find most built-in attributes.
-MESH_ATTRIBUTE_MATERIAL_INDEX = AttributeDescription("material_index", 'INT', 'FACE')
-MESH_ATTRIBUTE_POSITION = AttributeDescription("position", 'FLOAT_VECTOR', 'POINT',
-                                               is_required_check=lambda attributes: bool(attributes.id_data.vertices))
-MESH_ATTRIBUTE_SHARP_EDGE = AttributeDescription("sharp_edge", 'BOOLEAN', 'EDGE')
-MESH_ATTRIBUTE_EDGE_VERTS = AttributeDescription(".edge_verts", 'INT32_2D', 'EDGE',
-                                                 is_required_check=lambda attributes: bool(attributes.id_data.edges))
-MESH_ATTRIBUTE_CORNER_VERT = AttributeDescription(".corner_vert", 'INT', 'CORNER',
-                                                  is_required_check=lambda attributes: bool(attributes.id_data.loops))
-MESH_ATTRIBUTE_CORNER_EDGE = AttributeDescription(".corner_edge", 'INT', 'CORNER',
-                                                  is_required_check=lambda attributes: bool(attributes.id_data.loops))
-MESH_ATTRIBUTE_SHARP_FACE = AttributeDescription("sharp_face", 'BOOLEAN', 'FACE')
+# COMPAT EDIT BEGIN : If an attribute isn't part of the API yet, its corresponding desc var will now be False.
+MESH_ATTRIBUTE_MATERIAL_INDEX = api_compat.HAS_MESH_ATTR_MATERIAL_INDEX and \
+                AttributeDescription("material_index", 'INT', 'FACE')
+MESH_ATTRIBUTE_POSITION = api_compat.HAS_MESH_ATTR_POSITION and \
+                AttributeDescription("position", 'FLOAT_VECTOR', 'POINT',
+                                     is_required_check=lambda attributes: bool(attributes.id_data.vertices))
+MESH_ATTRIBUTE_SHARP_EDGE = api_compat.HAS_MESH_ATTR_SHARP_EDGE and \
+                AttributeDescription("sharp_edge", 'BOOLEAN', 'EDGE')
+MESH_ATTRIBUTE_EDGE_VERTS = api_compat.HAS_MESH_ATTR_EDGE_VERTS and \
+                AttributeDescription(".edge_verts", 'INT32_2D', 'EDGE',
+                                     is_required_check=lambda attributes: bool(attributes.id_data.edges))
+MESH_ATTRIBUTE_CORNER_VERT = api_compat.HAS_MESH_ATTRS_CORNER_VERT_AND_CORNER_EDGE and \
+                AttributeDescription(".corner_vert", 'INT', 'CORNER',
+                                     is_required_check=lambda attributes: bool(attributes.id_data.loops))
+MESH_ATTRIBUTE_CORNER_EDGE = api_compat.HAS_MESH_ATTRS_CORNER_VERT_AND_CORNER_EDGE and \
+                AttributeDescription(".corner_edge", 'INT', 'CORNER',
+                                     is_required_check=lambda attributes: bool(attributes.id_data.loops))
+MESH_ATTRIBUTE_SHARP_FACE = api_compat.HAS_MESH_ATTR_SHARP_FACE and \
+                AttributeDescription("sharp_face", 'BOOLEAN', 'FACE')
+# COMPAT END BEGIN
 
 
 # ##### UIDs code. #####
