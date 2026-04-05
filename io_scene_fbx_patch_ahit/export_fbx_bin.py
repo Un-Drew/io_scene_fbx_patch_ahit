@@ -881,8 +881,9 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
         fbx_data_element_custom_properties(props, me)
 
     # Subdivision levels. Take them from the first found subsurf modifier from the
-    # first object that has the mesh. Write crease information if the object has
-    # and subsurf modifier.
+    # first object that has the mesh. Always write crease information if present,
+    # if the modifier explicitly uses creases ("use_creases" setting) and mesh lacks them,
+    # still provide zeros (see TODO comment below)
     write_crease = False
     if scene_data.settings.use_subsurf:
         last_subsurf = None
@@ -908,6 +909,12 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
             elem_data_single_int32(geom, b"PropagateEdgeHardness", 0)
 
             write_crease = last_subsurf.use_creases
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_REFACTORED_EDGE_CREASES_3_4:
+        write_crease = (write_crease or me.use_customdata_edge_crease)
+    else:
+    # COMPAT ADD END
+        write_crease = (write_crease or me.edge_creases)
 
     elem_data_single_int32(geom, b"GeometryVersion", FBX_GEOMETRY_VERSION)
 
@@ -1700,9 +1707,9 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
         elem_data_single_string(lay_smooth, b"Type", b"LayerElementSmoothing")
         elem_data_single_int32(lay_smooth, b"TypedIndex", 0)
     if write_crease:
-        lay_smooth = elem_empty(layer, b"LayerElement")
-        elem_data_single_string(lay_smooth, b"Type", b"LayerElementEdgeCrease")
-        elem_data_single_int32(lay_smooth, b"TypedIndex", 0)
+        lay_crease = elem_empty(layer, b"LayerElement")
+        elem_data_single_string(lay_crease, b"Type", b"LayerElementEdgeCrease")
+        elem_data_single_int32(lay_crease, b"TypedIndex", 0)
     if vcolnumber:
         lay_vcol = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_vcol, b"Type", b"LayerElementColor")
@@ -2891,17 +2898,23 @@ def fbx_data_from_scene(scene, depsgraph, settings):
             # NOTE: The dependency graph might be re-evaluating multiple times, which could
             # potentially free the mesh created early on. So we put those meshes to bmain and
             # free them afterwards. Not ideal but ensures correct ownership.
+            # This also converts non-mesh Objects to Mesh data.
             tmp_me = bpy.data.meshes.new_from_object(
                 ob_to_convert, preserve_all_data_layers=True, depsgraph=depsgraph)
 
-            # Usually the materials of the evaluated object will be the same, but modifiers, such as Geometry Nodes,
-            # can change the materials.
-            orig_mats = tuple(slot.material for slot in ob.material_slots)
-            eval_mats = tuple(slot.material.original if slot.material else None
-                              for slot in ob_to_convert.material_slots)
+            # Usually the materials of the evaluated Object converted to a Mesh will be the same as the original
+            # Object, but modifiers, such as Geometry Nodes, can change the materials.
+            orig_mats = [slot.material for slot in ob.material_slots]
+            eval_mats = list(tmp_me.materials)
             if orig_mats != eval_mats:
+                # An object-linked material slot replaces the material on the data at the slot's index. If applying
+                # modifiers changes the materials on the data, the object-linked material slot will replace the new
+                # material at the same index as before.
+                for i, slot in zip(range(len(eval_mats)), ob.material_slots):
+                    if slot.link == 'OBJECT':
+                        eval_mats[i] = slot.material
                 # Override the default behavior of getting materials from `ob_obj.bdata.material_slots`.
-                ob_obj.override_materials = eval_mats
+                ob_obj.override_materials = tuple(eval_mats)
         elif do_convert:
             tmp_me = bpy.data.meshes.new_from_object(ob, preserve_all_data_layers=True, depsgraph=depsgraph)
         elif do_copy:

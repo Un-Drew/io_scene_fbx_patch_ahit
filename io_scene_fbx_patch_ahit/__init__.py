@@ -1,7 +1,7 @@
 bl_info = {
     "name": "FBX format - Compat",
     "author": "Back-compat by: UnDrew, Original add-on by: Blender Foundation",
-    "version": (4, 3, 1),
+    "version": (4, 4, 0),
     "blender": (2, 81, 0),
     "location": "File > Import-Export",
     "description": "FBX addon patched for backwards-compatibility",

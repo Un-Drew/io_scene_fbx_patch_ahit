@@ -38,7 +38,7 @@ def cycle_to_num(cycle):
 BL_VER_MAJOR, BL_VER_MINOR, BL_VER_MICRO = bpy.app.version
 BL_VER_CYCLE = cycle_to_num(bpy.app.version_cycle)
 
-def check_ver(min_major, min_minor, min_micro, min_cycle):
+def check_ver(min_major, min_minor, min_micro, min_cycle, tie_breaker_func=None):
     if BL_VER_MAJOR > min_major:
         return True
     if BL_VER_MAJOR < min_major:
@@ -51,7 +51,11 @@ def check_ver(min_major, min_minor, min_micro, min_cycle):
         return True
     if BL_VER_MICRO < min_micro:
         return False
-    return BL_VER_CYCLE >= cycle_to_num(min_cycle)
+    if BL_VER_CYCLE > cycle_to_num(min_cycle):
+        return True
+    if BL_VER_CYCLE < cycle_to_num(min_cycle):
+        return False
+    return tie_breaker_func and tie_breaker_func()
 
 """
 Functions that check a class's props/funcs by name. This script uses these to find out which APIs are available.
@@ -284,3 +288,13 @@ Sources:
 
 HAS_SPECIALIZED_ATTR_GROUP_TYPES = module_has_type_or_func(bpy.types, 'AttributeGroupMesh')
 HAS_CPP_NORMAL_NORMALIZATION = check_ver(4, 3, 0, 'beta')  # unsure how to check this more concretely...
+
+"""
+Added in 4.4.0
+Source: https://developer.blender.org/docs/release_notes/4.4/animation_rigging/#slotted-actions
+"""
+
+_ANIM_LAYERED_1_EXPERIMENTAL = class_has_rna_prop(bpy.types.PreferencesExperimental, 'use_animation_baklava')
+# 1st phase of refactoring actions to be layered.
+# Adds the action Slots feature, and Channel Bags, Layers, Strips to the API (not exposed in UI yet, so one-strip limit)
+HAS_ANIM_LAYERED_1_STABLE = check_ver(4, 4, 0, 'alpha', tie_breaker_func=lambda: not _ANIM_LAYERED_1_EXPERIMENTAL)
