@@ -55,7 +55,6 @@ if api_compat.HAS_IMPORT_HELPER_INVOKE_POPUP_FUNC:
         poll_file_object_drop,
     )
 
-
 # COMPAT ADD BEGIN
 from dataclasses import dataclass, field
 # NOTE: Obsolete since later versions of Python, but needed in 3.7.

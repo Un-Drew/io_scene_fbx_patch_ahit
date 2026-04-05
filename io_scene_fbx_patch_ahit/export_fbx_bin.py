@@ -602,8 +602,8 @@ def fbx_data_light_elements(root, lamp, scene_data):
 
     light_key = scene_data.data_lights[lamp]
     do_light = True
-    # NOTE: this was removed from lamps, always write black.
     do_shadow = False
+    # NOTE: this was removed from lamps, always write black.
     shadow_color = Vector((0.0, 0.0, 0.0))
     if lamp.type not in {'HEMI'}:
         do_light = True
