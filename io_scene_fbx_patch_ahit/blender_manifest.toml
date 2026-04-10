@@ -2,7 +2,7 @@ schema_version = "1.0.0"
 
 id = "io_scene_fbx_patch_ahit"
 
-version = "4.5.5"
+version = "5.0.0"
 
 name = "FBX format - AHiT patch"
 tagline = "Modified FBX add-on; fixes some compatibility issues with AHiT"

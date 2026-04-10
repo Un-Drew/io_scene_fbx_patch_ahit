@@ -2115,5 +2115,5 @@ FBXImportSettings = namedtuple("FBXImportSettings", (
     # UnDrew Add Start : New settings that need to be passed to the importer's "settings" var.
     "UE3_import_root_as_bone", "UE3_import_scale_inheritance", "UE3_connect_children",
     # UnDrew Add End
-    "use_prepost_rot", "colors_type",
+    "use_prepost_rot", "colors_type", "mtl_name_collision_mode",
 ))

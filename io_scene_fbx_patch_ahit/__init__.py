@@ -1,8 +1,10 @@
 # UnDrew Edit Start : Differentiate from the base add-on.
 bl_info = {
     "name": "FBX format - AHiT patch",
-    "author": "Original add-on by: Campbell Barton, Bastien Montagne, Jens Restemeier, @Mysteryem. Modified by: UnDrew",
-    "version": (4, 5, 5),
+    # This is now displayed as the maintainer, so show the foundation.
+    # "author": "Campbell Barton, Bastien Montagne, Jens Restemeier, @Mysteryem", # Original Authors
+    "author": "Original add-on by: Blender Foundation. Modified by: UnDrew",
+    "version": (5, 0, 0),
     "blender": (2, 81, 0),
     "location": "File > Import-Export",
     "description": "Modified FBX add-on; fixes some compatibility issues with AHiT",
@@ -497,6 +499,15 @@ class ImportFBX_patch_ahit(bpy.types.Operator, ImportHelper):
         description="Use pre/post rotation from FBX transform (you may have to disable that in some cases)",
         default=True,
     )
+    mtl_name_collision_mode: EnumProperty(
+        name="Material Name Collision",
+        items=(("MAKE_UNIQUE", "Make Unique", "Import each FBX material as a unique Blender material"),
+               ("REFERENCE_EXISTING", "Reference Existing",
+               "If a material with the same name already exists, reference that instead of importing"),
+               ),
+        default='MAKE_UNIQUE',
+        description="Behavior when the name of an imported material conflicts with an existing material",
+    )
 
     def draw(self, context):
         # COMPAT EDIT BEGIN : See CompatPanelInfo.
@@ -563,6 +574,12 @@ def import_panel_transform_orientation(body: bpy.types.UILayout, operator: bpy.t
 
 
 # COMPAT EDIT BEGIN : See CompatPanelInfo.
+def import_panel_materials(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
+# COMPAT EDIT END
+    body.prop(operator, "mtl_name_collision_mode")
+
+
+# COMPAT EDIT BEGIN : See CompatPanelInfo.
 def import_panel_animation(body: bpy.types.UILayout, operator: bpy.types.Operator, is_file_browser: bool):
 # COMPAT EDIT END
     body.enabled = operator.use_anim
@@ -606,6 +623,7 @@ COMPAT_PANELS_IMPORT = [
         CompatPanelInfo(id_name="import_transform_manual_orientation", label="Manual Orientation", \
                         draw=import_panel_transform_orientation, header_prop_name="use_manual_orientation"),
     ]),
+    CompatPanelInfo(id_name="import_materials", label="Materials", draw=import_panel_materials, default_closed=True),
     CompatPanelInfo(id_name="import_animation", label="Animation", draw=import_panel_animation, default_closed=True, \
                     header_prop_name="use_anim"),
     CompatPanelInfo(id_name="import_armature", label="Armature", draw=import_panel_armature, default_closed=True),
@@ -728,7 +746,7 @@ class ExportFBX_patch_ahit(bpy.types.Operator, ExportHelper):
         name="Smoothing",
         items=_mesh_smooth_type_items,
         description="Export smoothing information "
-        "(prefer 'Normals Only' option if your target importer understand split normals)",
+        "(prefer 'Normals Only' option if your target importer understands custom normals)",
         default='OFF',
     )
     colors_type: EnumProperty(

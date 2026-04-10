@@ -1338,8 +1338,7 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
         # COMPAT EDIT BEGIN : Removed use of the match statement (see: fbx_api_compat.HAS_PY_MATCH).
         elif normals_domain in {'CORNER', 'FACE'}:
         # COMPAT EDIT END
-            # We have a mix of sharp/smooth edges/faces or custom split normals, so need to get normals from
-            # corners.
+            # We have a mix of sharp/smooth edges/faces or custom normals, so need to get normals from corners.
             # COMPAT ADD BEGIN
             if not api_compat.HAS_CORN_NORM_ARRAY:
                 normal_source = me.loops
@@ -1868,10 +1867,21 @@ def fbx_data_material_elements(root, ma, scene_data):
     if scene_data.settings.use_custom_props:
         fbx_data_element_custom_properties(props, ma)
 
+def _get_image_filepath(img):
+    if len(img.filepath) > 0:
+        return img.filepath
+
+    # It's possible to have a packed image without a filepath. Pick a filepath
+    # that is unlikely to conflict.
+    filepath = os.path.join("textures", "packed")
+    if img.library:
+        filepath = os.path.join(filepath, bpy.path.clean_name(img.library.name))
+    return "//" + os.path.join(filepath, bpy.path.clean_name(img.name))
 
 def _gen_vid_path(img, scene_data):
     msetts = scene_data.settings.media_settings
-    fname_rel = bpy_extras.io_utils.path_reference(img.filepath, msetts.base_src, msetts.base_dst, msetts.path_mode,
+    img_filepath = _get_image_filepath(img)
+    fname_rel = bpy_extras.io_utils.path_reference(img_filepath, msetts.base_src, msetts.base_dst, msetts.path_mode,
                                                    msetts.subdir, msetts.copy_set, img.library)
     fname_abs = os.path.normpath(os.path.abspath(os.path.join(msetts.base_dst, fname_rel)))
     return fname_abs, fname_rel
@@ -2811,16 +2821,40 @@ def fbx_animations(scene_data):
 
     # All actions.
     if scene_data.settings.bake_anim_use_all_actions:
-        def validate_actions(act, path_resolve):
-            for fc in act.fcurves:
-                data_path = fc.data_path
-                if fc.array_index:
-                    data_path = data_path + "[%d]" % fc.array_index
-                try:
-                    path_resolve(data_path)
-                except ValueError:
-                    return False  # Invalid.
-            return True  # Valid.
+        def is_fcurve_valid(fc, path_resolve):
+            data_path = fc.data_path
+            if fc.array_index:
+                data_path = data_path + "[%d]" % fc.array_index
+            try:
+                path_resolve(data_path)
+            except ValueError:
+                return False
+            return True
+        
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_ANIM_LAYERED_1_STABLE:
+            def validate_actions(act, path_resolve):
+                for fc in act.fcurves:
+                    data_path = fc.data_path
+                    if not is_fcurve_valid(fc, path_resolve):
+                        return False  # Invalid.
+                return True  # Valid.
+        else:
+        # COMPAT ADD END
+            def find_validate_action_slot(act, path_resolve) -> bpy.types.ActionSlot | None:
+                for layer in act.layers:
+                    for strip in layer.strips:
+                        for channelbag in strip.channelbags:
+                            if not channelbag.fcurves:
+                                # Do not export empty Channelbags.
+                                continue
+                            for fc in channelbag.fcurves:
+                                if not is_fcurve_valid(fc, path_resolve):
+                                    break  # Invalid, go to next strip.
+                            else:
+                                # Did not 'break', so all F-Curves are valid.
+                                return channelbag.slot
+                return None  # Found nothing to return.
 
         def restore_object(ob_to, ob_from):
             # Restore org state of object (ugh :/ ).
@@ -2860,14 +2894,32 @@ def fbx_animations(scene_data):
             pbones_matrices = [pbo.matrix_basis.copy() for pbo in ob.pose.bones] if ob.type == 'ARMATURE' else ...
 
             org_act = ob.animation_data.action
+            # COMPAT ADD BEGIN
+            if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+            # COMPAT ADD END
+                org_act_slot = ob.animation_data.action_slot
             path_resolve = ob.path_resolve
 
             for act in bpy.data.actions:
                 # For now, *all* paths in the action must be valid for the object, to validate the action.
                 # Unless that action was already assigned to the object!
-                if act != org_act and not validate_actions(act, path_resolve):
-                    continue
+                # COMPAT ADD BEGIN
+                if not api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                    if act != org_act and not validate_actions(act, path_resolve):
+                        continue
+                else:
+                # COMPAT ADD END
+                    if act == org_act:
+                        act_slot = org_act_slot
+                    else:
+                        act_slot = find_validate_action_slot(act, path_resolve)
+                    if not act_slot:
+                        continue
                 ob.animation_data.action = act
+                # COMPAT ADD BEGIN
+                if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                # COMPAT ADD END
+                    ob.animation_data.action_slot = act_slot
                 frame_start, frame_end = act.frame_range  # sic!
                 add_anim(animations, animated,
                          fbx_animations_do(scene_data, (ob, act), frame_start, frame_end, True,
@@ -2877,6 +2929,11 @@ def fbx_animations(scene_data):
                     for pbo, mat in zip(ob.pose.bones, pbones_matrices):
                         pbo.matrix_basis = mat.copy()
                 ob.animation_data.action = org_act
+                # COMPAT ADD BEGIN
+                if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                # COMPAT ADD END
+                    if org_act:
+                        ob.animation_data.action_slot = org_act_slot
                 restore_object(ob, ob_copy)
                 scene.frame_set(scene.frame_current, subframe=0.0)
 
@@ -2884,6 +2941,11 @@ def fbx_animations(scene_data):
                 for pbo, mat in zip(ob.pose.bones, pbones_matrices):
                     pbo.matrix_basis = mat.copy()
             ob.animation_data.action = org_act
+            # COMPAT ADD BEGIN
+            if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+            # COMPAT ADD END
+                if org_act:
+                    ob.animation_data.action_slot = org_act_slot
 
             bpy.data.objects.remove(ob_copy)
             scene.frame_set(scene.frame_current, subframe=0.0)
