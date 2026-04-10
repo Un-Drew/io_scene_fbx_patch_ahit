@@ -1,7 +1,7 @@
 bl_info = {
     "name": "FBX format - Compat",
     "author": "Back-compat by: UnDrew, Original add-on by: Blender Foundation",
-    "version": (4, 4, 0),
+    "version": (4, 5, 5),
     "blender": (2, 81, 0),
     "location": "File > Import-Export",
     "description": "FBX addon patched for backwards-compatibility",
@@ -234,7 +234,16 @@ class ImportFBX_compat(bpy.types.Operator, ImportHelper):
     bl_label = "Import FBX - Compat"
     bl_options = {'UNDO', 'PRESET'}
 
-    directory: StringProperty()
+    _directory_and_files_options = {'HIDDEN'}
+    # COMPAT ADD BEGIN
+    if api_compat.HAS_PROPERTY_SKIP_PRESET_OPTION:
+    # COMPAT ADD END
+        _directory_and_files_options.add('SKIP_PRESET')
+
+    directory: StringProperty(
+        subtype='DIR_PATH',
+        options=_directory_and_files_options,
+    )
 
     filename_ext = ".fbx"
     filter_glob: StringProperty(default="*.fbx", options={'HIDDEN'})
@@ -242,6 +251,7 @@ class ImportFBX_compat(bpy.types.Operator, ImportHelper):
     files: CollectionProperty(
         name="File Path",
         type=bpy.types.OperatorFileListElement,
+        options=_directory_and_files_options,
     )
 
     ui_tab: EnumProperty(
@@ -390,9 +400,8 @@ class ImportFBX_compat(bpy.types.Operator, ImportHelper):
 
         if self.files:
             ret = {'CANCELLED'}
-            dirname = os.path.dirname(self.filepath)
             for file in self.files:
-                path = os.path.join(dirname, file.name)
+                path = os.path.join(self.directory, file.name)
                 if import_fbx.load(self, context, filepath=path, **keywords) == {'FINISHED'}:
                     ret = {'FINISHED'}
             return ret
@@ -574,12 +583,18 @@ class ExportFBX_compat(bpy.types.Operator, ExportHelper):
         description="Use render settings when applying modifiers to mesh objects (DISABLED in Blender 2.8)",
         default=True,
     )
+    _mesh_smooth_type_items = [
+        ('OFF', "Normals Only", "Export only normals instead of writing edge or face smoothing data"),
+        ('FACE', "Face", "Write face smoothing"),
+        ('EDGE', "Edge", "Write edge smoothing"),
+    ]
+    # COMPAT ADD BEGIN
+    if api_compat.HAS_SMOOTH_GROUPS_BOUNDARY_VERTICES_PARAM:
+        _mesh_smooth_type_items.append(('SMOOTH_GROUP', "Smoothing Groups", "Write face smoothing groups"))
+    # COMPAT ADD END
     mesh_smooth_type: EnumProperty(
         name="Smoothing",
-        items=(('OFF', "Normals Only", "Export only normals instead of writing edge or face smoothing data"),
-               ('FACE', "Face", "Write face smoothing"),
-               ('EDGE', "Edge", "Write edge smoothing"),
-               ),
+        items=_mesh_smooth_type_items,
         description="Export smoothing information "
         "(prefer 'Normals Only' option if your target importer understand split normals)",
         default='OFF',

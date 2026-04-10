@@ -278,6 +278,8 @@ HAS_COLLECTION_EXPORTERS = HAS_FILE_HANDLERS and class_has_rna_prop(bpy.types.Fi
 HAS_EXTENSION_SUPPORT = check_ver(4, 2, 0, 'beta')
 if HAS_EXTENSION_SUPPORT:
     assert(PY_VER >= (3, 11))
+_ANIM_LAYERED_1_EXPERIMENTAL = check_ver(4, 2, 0, 'alpha') \
+                                    and class_has_rna_prop(bpy.types.PreferencesExperimental, 'use_animation_baklava')
 
 """
 Added in 4.3.0
@@ -294,7 +296,20 @@ Added in 4.4.0
 Source: https://developer.blender.org/docs/release_notes/4.4/animation_rigging/#slotted-actions
 """
 
-_ANIM_LAYERED_1_EXPERIMENTAL = class_has_rna_prop(bpy.types.PreferencesExperimental, 'use_animation_baklava')
 # 1st phase of refactoring actions to be layered.
 # Adds the action Slots feature, and Channel Bags, Layers, Strips to the API (not exposed in UI yet, so one-strip limit)
 HAS_ANIM_LAYERED_1_STABLE = check_ver(4, 4, 0, 'alpha', tie_breaker_func=lambda: not _ANIM_LAYERED_1_EXPERIMENTAL)
+if HAS_ANIM_LAYERED_1_STABLE:
+    assert(not _ANIM_LAYERED_1_EXPERIMENTAL)
+
+"""
+Added in 4.5.0
+Sources:
+* https://developer.blender.org/docs/release_notes/4.5/rendering/#new-light-controls
+* https://developer.blender.org/docs/release_notes/4.5/python_api/#pipeline-io
+"""
+
+HAS_LIGHT_TEMPERATURE = class_has_rna_prop(bpy.types.Light, 'temperature')
+HAS_LIGHT_EXPOSURE = class_has_rna_prop(bpy.types.Light, 'exposure')
+HAS_SMOOTH_GROUPS_BOUNDARY_VERTICES_PARAM = class_rna_func_has_param(bpy.types.Mesh, 'calc_smooth_groups',
+                                                                     'use_boundary_vertices_for_bitflags')
