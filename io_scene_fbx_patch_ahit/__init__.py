@@ -4,7 +4,7 @@ bl_info = {
     # This is now displayed as the maintainer, so show the foundation.
     # "author": "Campbell Barton, Bastien Montagne, Jens Restemeier, @Mysteryem", # Original Authors
     "author": "Original add-on by: Blender Foundation. Modified by: UnDrew",
-    "version": (5, 0, 0),
+    "version": (5, 1, 0),
     "blender": (2, 81, 0),
     "location": "File > Import-Export",
     "description": "Modified FBX add-on; fixes some compatibility issues with AHiT",
@@ -675,7 +675,10 @@ class ExportFBX_patch_ahit(bpy.types.Operator, ExportHelper):
     )
     apply_unit_scale: BoolProperty(
         name="Apply Unit",
-        description="Take into account current Blender units settings (if unset, raw Blender Units values are used as-is)",
+        description=(
+            "Take into account current Blender units settings "
+            "(if unset, raw Blender Units values are used as-is)"
+        ),
         default=True,
     )
     apply_scale_options: EnumProperty(
@@ -716,7 +719,7 @@ class ExportFBX_patch_ahit(bpy.types.Operator, ExportHelper):
                ('LIGHT', "Lamp", ""),
                ('ARMATURE', "Armature", "WARNING: not supported in dupli/group instances"),
                ('MESH', "Mesh", ""),
-               ('OTHER', "Other", "Other geometry types, like curve, metaball, etc. (converted to meshes)"),
+               ('OTHER', "Other", "Other geometry types, like curve, meta-ball, etc. (converted to meshes)"),
                ),
         description="Which kind of object to export",
         default={'EMPTY', 'CAMERA', 'LIGHT', 'ARMATURE', 'MESH', 'OTHER'},
@@ -1076,9 +1079,9 @@ def export_panel_geometry(body: bpy.types.UILayout, operator: bpy.types.Operator
     body.prop(operator, "mesh_smooth_type")
     body.prop(operator, "use_subsurf")
     body.prop(operator, "use_mesh_modifiers")
-    #sub = body.row()
+    # sub = body.row()
     # sub.enabled = operator.use_mesh_modifiers and False  # disabled in 2.8...
-    #sub.prop(operator, "use_mesh_modifiers_render")
+    # sub.prop(operator, "use_mesh_modifiers_render")
     body.prop(operator, "use_mesh_edges")
     body.prop(operator, "use_triangles")
     sub = body.row()
