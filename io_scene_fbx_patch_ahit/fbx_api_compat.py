@@ -7,10 +7,7 @@ Since that addon was normally bundled with Blender, there was (presumably) no in
 make it backwards-compatible with APIs in older versions. However, because this project aims to be backwards-compatible,
 some API calls need to be done conditionally.
 
-As such, this module does the following:
-
-* Keeps track of which API features are available.
-* Sometimes, provides functions that conditionally use the appropriate API.
+As such, this module keeps track of which of these API features are available in the current Blender version.
 """
 
 import bpy
@@ -173,6 +170,7 @@ Added in 3.1.0
 Source: https://developer.blender.org/docs/release_notes/3.1/python_api/#other-additions
 """
 
+HAS_REFACTORED_MESH_NORM = check_ver(3, 1, 0, 'alpha')  # unsure how to check this more concretely...
 HAS_VRTX_AND_PLGN_NORM_ARRAYS = class_has_rna_prop(bpy.types.Mesh, 'vertex_normals')
 # The match statement (called "switch" in other langs) was only added in Python 3.10, so it can't be used in Blender
 # versions before 3.1. Despite adding this condition here, I won't be using the statement at all, because Python seems
@@ -184,9 +182,15 @@ Added in 3.2.0
 Sources:
     * https://developer.blender.org/docs/release_notes/3.2/sculpt/#color-attributes
     * https://docs.blender.org/api/3.2/change_log.html#bpy-types-mesh
+    * https://projects.blender.org/blender/blender/commit/c9c95201d0812967e6b03d68a51721e79cd429d8
 """
 
 HAS_MESH_COL_ATTRS_PROP = class_has_rna_prop(bpy.types.Mesh, 'color_attributes')  # Also when the UI for them changed
+# 3.1's normal refactor (HAS_REFACTORED_MESH_NORM) broke `ShapeKey.normals_vertex_get()` for the entirety of 3.1.X.
+#     * In 3.1.0, calling it crashes.
+#     * In 3.1.1, 3.1.2, calling it incorrectly modifies `MeshVertex.co`, causing wrong mesh exports.
+# This was later fixed during 3.2's alpha by commit c9c95201d0.
+HAS_FIXED_SHAPEKEY_NORM_AFTER_NORM_REFACTOR = check_ver(3, 2, 0, 'beta')  # unsure how to check this more concretely...
 
 """
 Added in 3.4.0
@@ -278,7 +282,7 @@ HAS_COLLECTION_EXPORTERS = HAS_FILE_HANDLERS and class_has_rna_prop(bpy.types.Fi
 #       extensions were fully functional at this point, but for my purposes it's enough.
 HAS_EXTENSION_SUPPORT = check_ver(4, 2, 0, 'beta')
 if HAS_EXTENSION_SUPPORT:
-    assert(PY_VER >= (3, 11))
+    assert PY_VER >= (3, 11)
 _ANIM_LAYERED_1_EXPERIMENTAL = check_ver(4, 2, 0, 'alpha') \
                                     and class_has_rna_prop(bpy.types.PreferencesExperimental, 'use_animation_baklava')
 
@@ -301,7 +305,7 @@ Source: https://developer.blender.org/docs/release_notes/4.4/animation_rigging/#
 # Adds the action Slots feature, and Channel Bags, Layers, Strips to the API (not exposed in UI yet, so one-strip limit)
 HAS_ANIM_LAYERED_1_STABLE = check_ver(4, 4, 0, 'alpha', tie_breaker_func=lambda: not _ANIM_LAYERED_1_EXPERIMENTAL)
 if HAS_ANIM_LAYERED_1_STABLE:
-    assert(not _ANIM_LAYERED_1_EXPERIMENTAL)
+    assert not _ANIM_LAYERED_1_EXPERIMENTAL
 
 """
 Added in 4.5.0

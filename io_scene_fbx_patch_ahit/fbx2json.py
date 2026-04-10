@@ -93,7 +93,7 @@ def unpack_array(read, array_type, array_stride, array_byteswap):
     elif encoding == 1:
         data = zlib.decompress(data)
 
-    assert(length * array_stride == len(data))
+    assert length * array_stride == len(data)
 
     data_array = array.array(array_type, data)
     if array_byteswap and _IS_BIG_ENDIAN:
@@ -127,8 +127,8 @@ read_data_dict = {
 def init_version(fbx_version):
     global _BLOCK_SENTINEL_LENGTH, _BLOCK_SENTINEL_DATA, read_fbx_elem_uint
 
-    assert(_BLOCK_SENTINEL_LENGTH == ...)
-    assert(_BLOCK_SENTINEL_DATA == ...)
+    assert _BLOCK_SENTINEL_LENGTH == ...
+    assert _BLOCK_SENTINEL_DATA == ...
 
     if fbx_version < 7500:
         _BLOCK_SENTINEL_LENGTH = 13
@@ -247,7 +247,7 @@ parse_bin.__dict__.update(
 
 # ----------------------------------------------------------------------------
 # JSON Converter
-# from pyfbx import parse_bin, data_types
+# from PyFBX import parse_bin, data_types
 import json
 import array
 

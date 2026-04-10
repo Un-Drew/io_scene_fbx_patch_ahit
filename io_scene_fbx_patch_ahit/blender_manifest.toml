@@ -1,14 +1,13 @@
 schema_version = "1.0.0"
 
 id = "io_scene_fbx_compat"
-version = "5.0.0"
+version = "5.1.0"
 name = "FBX format - Compat"
 tagline = "FBX addon patched for backwards-compatibility"
 maintainer = "Back-compat by: UnDrew, Original add-on by: Blender Foundation"
 type = "add-on"
 
-# # Optional: link to documentation, support, source files, etc
-# website = "https://extensions.blender.org/add-ons/my-example-package/"
+website = "https://github.com/Un-Drew/io_scene_fbx_compat"
 
 tags = ["Import-Export"]
 
