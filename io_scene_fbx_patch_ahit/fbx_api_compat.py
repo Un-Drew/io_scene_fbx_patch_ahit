@@ -16,6 +16,7 @@ As such, this module does the following:
 import bpy
 import bpy_extras.node_shader_utils
 import bpy_extras.io_utils
+import bpy_extras.anim_utils
 import sys
 import numpy as np
 
@@ -313,3 +314,10 @@ HAS_LIGHT_TEMPERATURE = class_has_rna_prop(bpy.types.Light, 'temperature')
 HAS_LIGHT_EXPOSURE = class_has_rna_prop(bpy.types.Light, 'exposure')
 HAS_SMOOTH_GROUPS_BOUNDARY_VERTICES_PARAM = class_rna_func_has_param(bpy.types.Mesh, 'calc_smooth_groups',
                                                                      'use_boundary_vertices_for_bitflags')
+
+"""
+Added in 5.0.0
+Source: https://developer.blender.org/docs/release_notes/5.0/python_api/#animation-rigging
+"""
+
+HAS_ANIM_UTILS_ENSURE_CHBAG_FUNC = module_has_type_or_func(bpy_extras.anim_utils, 'action_ensure_channelbag_for_slot')
