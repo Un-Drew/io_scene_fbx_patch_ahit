@@ -1121,15 +1121,31 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
                         action_name = "|".join((id_data.name, stack_name, layer_name))
                     actions[key] = action = bpy.data.actions.new(action_name)
                     action.use_fake_user = True
+
+                    # COMPAT ADD BEGIN
+                    if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                    # COMPAT ADD END
+                        # Create an Action Slot. Curves created via action.fcurves will automatically be assigned to it.
+                        action.slots.new(id_data.id_type, action_name)
+
                     # UnDrew Add Start : Set the proper id_root on the action, so it isn't possible to irreparably lock an action to the wrong type.
                     if UE3_set_action_id_root:
-                        action.id_root = id_data.id_type
+                        if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                            action.slots[0].target_id_type = id_data.target_id_type
+                        else:
+                            action.id_root = id_data.id_type
                     # UnDrew Add End
+
                 # If none yet assigned, assign this action to id_data.
                 if not id_data.animation_data:
                     id_data.animation_data_create()
                 if not id_data.animation_data.action:
                     id_data.animation_data.action = action
+                    # COMPAT ADD BEGIN
+                    if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                    # COMPAT ADD END
+                        id_data.animation_data.action_slot = action.slots[0]
+
                 # And actually populate the action!
                 # UnDrew Edit Start : Divide by fps_base to use the *final* fps.
                 blen_read_animations_action_item(action, item, cnodes, (scene.render.fps / scene.render.fps_base) if UE3_custom_fps_fix else scene.render.fps, anim_offset, global_scale,

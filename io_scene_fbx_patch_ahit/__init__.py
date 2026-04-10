@@ -2,7 +2,7 @@
 bl_info = {
     "name": "FBX format - AHiT patch",
     "author": "Original add-on by: Campbell Barton, Bastien Montagne, Jens Restemeier, @Mysteryem. Modified by: UnDrew",
-    "version": (4, 3, 1),
+    "version": (4, 4, 0),
     "blender": (2, 81, 0),
     "location": "File > Import-Export",
     "description": "Modified FBX add-on; fixes some compatibility issues with AHiT",
