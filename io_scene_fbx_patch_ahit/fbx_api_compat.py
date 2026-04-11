@@ -251,6 +251,7 @@ Sources:
     * https://docs.blender.org/api/4.1/bpy_types_enum_items/property_flag_items.html#rna-enum-property-flag-items
     * https://docs.blender.org/api/4.0/bpy.app.translations.html
     * https://docs.blender.org/api/4.1/bpy.app.translations.html#bpy.app.translations.pgettext_rpt
+    * https://docs.blender.org/api/4.1/change_log.html#bpy-types-id
 """
 
 # Several things happened in the same PR:
@@ -269,6 +270,9 @@ HAS_FILE_HANDLERS = module_has_type_or_func(bpy.types, 'FileHandler')
 HAS_EXTENDED_DNA_TYPES_4_1 = check_ver(4, 1, 0, 'beta')  # unsure how to check this more concretely...
 HAS_PROPERTY_SKIP_PRESET_OPTION = class_has_rna_prop(bpy.types.Property, 'is_skip_preset')
 HAS_TRANSLATION_FOR_REPORTS = module_has_type_or_func(bpy.app.translations, 'pgettext_rpt')
+# UnDrew Add Start
+HAS_ID_TYPE_PROP = class_has_rna_prop(bpy.types.ID, 'id_type')
+# UnDrew Add End
 
 """
 Added in 4.2.0

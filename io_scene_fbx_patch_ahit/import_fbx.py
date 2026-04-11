@@ -1106,6 +1106,18 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
     """
     from bpy.types import ShapeKey, Material, Camera
 
+    # UnDrew Add Start : Function for getting the id_type of an ID.
+    if not api_compat.HAS_ID_TYPE_PROP:
+        # The ID.id_type property was only added in 4.1, so a substitude is needed in older vers.
+        # This importer can only animate: Object, Key, Camera, Material. Their id_type is just the type in uppercase.
+        # NOTE that this isn't true for all IDs in Blender. E.g. GreasePencilv3 -> 'GREASEPENCIL_V3'
+        def get_id_type(id_data):
+            return id_data.bl_rna.identifier.upper()
+    else:
+        def get_id_type(id_data):
+            return id_data.id_type
+    # UnDrew Add End
+
     shape_key_values = {}
     actions = {}
     for as_uuid, ((fbx_asdata, _blen_data), alayers) in stacks.items():
@@ -1151,12 +1163,13 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
                         # 'stack name' would be a better choice?
                         action.slots.new(id_data.id_type, "Slot")
 
-                    # UnDrew Add Start : Set the proper id_root on the action, so it isn't possible to irreparably lock an action to the wrong type.
+                    # UnDrew Add Start : Set the proper id_root on the action/slot, so it isn't possible to irreparably
+                    #                    lock it to the wrong type. E.g. Key action to an Object or vice-versa.
                     if UE3_set_action_id_root:
                         if api_compat.HAS_ANIM_LAYERED_1_STABLE:
-                            action.slots[0].target_id_type = id_data.target_id_type
+                            action.slots[0].target_id_type = get_id_type(id_data)
                         else:
-                            action.id_root = id_data.id_type
+                            action.id_root = get_id_type(id_data)
                     # UnDrew Add End
 
                 # If none yet assigned, assign this action to id_data.
