@@ -1,15 +1,13 @@
 # Blender FBX - patched for A Hat in Time
 
-This is a modification of the core FBX add-on that ships with Blender, that aims to fix several compatibility issues with the A Hat in Time modding tools (and possibly other Unreal Engine 3 games).
+This is a modified FBX add-on that aims to fix several compatibility issues with the A Hat in Time modding tools (and possibly other Unreal Engine 3 games).
 
 Changes include:
-* Root bone fixes (import and export): No more missing/extra bones when porting skeletons!
-* Animation batch-exporting: Each animation can be exported as an individual file.
-* Scale animation fixes: Support for `Aligned` scale inheritance.
+* Root bone fixes (import and export): It no longer removes/adds a root bone from skeletons.
+* Animation batch-exporting: Each animation can be exported as a separate `.fbx` file.
+* Scale animation fixes: Support for more scale inheritance modes, like `Aligned`.
 
-...and more™! You can find a **[full list of fixes & additions](https://github.com/Un-Drew/io_scene_fbx_patch_ahit/wiki/Fixes-&-Additions)** on the wiki.
-
-The source code of the vanilla add-on (the one that ships with Blender) can be found **[here](https://github.com/blender/blender/tree/main/scripts/addons_core/io_scene_fbx)**.
+...and more! You can find a **[full list of fixes & additions](https://github.com/Un-Drew/io_scene_fbx_patch_ahit/wiki/Fixes-&-Additions)** on the wiki.
 
 # Downloading and installing
 
@@ -25,4 +23,4 @@ This patch can be downloaded from the [Releases](https://github.com/Un-Drew/io_s
 * [Full list of fixes & additions](https://github.com/Un-Drew/io_scene_fbx_patch_ahit/wiki/Fixes-&-Additions)
 * [Changelog](https://github.com/Un-Drew/io_scene_fbx_patch_ahit/wiki/Changelog)
 * [Issues and Requests](https://github.com/Un-Drew/io_scene_fbx_patch_ahit/issues) - Any issues you may find with the patch can be reported here. This can also be used to make feature requests.
-* [Source code of the original add-on](https://github.com/blender/blender/tree/main/scripts/addons_core/io_scene_fbx)
+* Add-on based on [io_scene_fbx_compat](https://github.com/Un-Drew/io_scene_fbx_compat) for backwards-compatibility.
