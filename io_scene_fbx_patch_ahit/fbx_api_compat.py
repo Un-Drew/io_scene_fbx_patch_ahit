@@ -92,6 +92,11 @@ def class_has_rna_prop(cla, propname):
 def class_rna_prop_is_readonly(cla, propname):
     return cla.bl_rna.properties[propname].is_readonly
 
+# UnDrew Add Start
+def class_rna_prop_has_enum_item(cla, propname, enumitem):
+    return enumitem in cla.bl_rna.properties[propname].enum_items
+# UnDrew Add End
+
 # Checks whether a natively-defined class has the specified RNA function.
 def class_has_rna_func(cla, funcname):
     return funcname in cla.bl_rna.functions
@@ -119,6 +124,15 @@ def class_has_py_func(cla, funcname):
 #      Instead, its natively-defined functions are structured similarly to python-defined functions. Idk why?
 def bpy_struct_has_rna_func(funcname):
     return hasattr(bpy.types.bpy_struct, funcname)
+
+# UnDrew Add Start
+"""
+Added in 2.82
+Source: https://developer.blender.org/docs/release_notes/2.82/rigging/
+"""
+
+HAS_BONE_ALIGNED_INHERIT_SCALE = class_rna_prop_has_enum_item(bpy.types.Bone, 'inherit_scale', 'ALIGNED')
+# UnDrew Add End
 
 """
 Added in 2.90.0

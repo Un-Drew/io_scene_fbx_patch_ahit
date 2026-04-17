@@ -3029,13 +3029,18 @@ class FbxImportHelperNode:
         bone.matrix = bone_matrix
 
         # UnDrew Add Start : Set the proper inherit_scale value based on FBX's InheritType.
-        # TODO: This is not accurate when there's different InheritTypes in the same skeleton. Oh well!
+        # TODO: This is not accurate when there's alternating InheritTypes in the same skeleton.
+        #       See `fbx_utils.ObjectWrapper.get_inherit_type()`
         if settings.UE3_import_scale_inheritance:
-            bone.inherit_scale = {
+            inherit_scale = {
                 0: 'ALIGNED',   # 0 = RrSs
                 1: 'FULL',      # 1 = RSrs
                 2: 'NONE'       # 2 = Rrs
             }.get(self.fbx_transform_data.inherit_type, 'FULL')
+            if not api_compat.HAS_BONE_ALIGNED_INHERIT_SCALE and inherit_scale == 'ALIGNED':
+                # TODO: Maybe this could instead use 'NONE' and edit keyframes? A lot of work for just 1 ver though.
+                inherit_scale = 'FULL'
+            bone.inherit_scale = inherit_scale
         else:
             bone.inherit_scale = 'FULL'
         # UnDrew Add End
