@@ -1768,6 +1768,85 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         return None
     bdata_pose_bone = property(get_bdata_pose_bone)
 
+    # UnDrew Add Start : InheritType support. AHiT only natively supports RrSs, or Rrs which it can losslessly convert.
+    def get_bone_matrix_local_for_inherit_scale(self, par, inherit_scale_to_use):
+        """
+        Get the parent-relative loc, rot, scale of a bone with a forced inherit_scale. This isn't quite a "real"
+        transform matrix (not meant to converted in global space), but it's needed like this for `fbx_object_matrix()`,
+        so it can be used by `fbx_object_tx()`.
+        """
+        pbone = self._ref.pose.bones[self.bdata.name]
+        saved_pose_matrix = pbone.matrix.copy()
+
+        org_inherit_scale = self.bdata.inherit_scale
+        org_no_local_location = not self.bdata.use_local_location
+        org_no_inherit_rotation = not self.bdata.use_inherit_rotation
+
+        if org_inherit_scale != inherit_scale_to_use:
+            self.bdata.inherit_scale = inherit_scale_to_use
+        # `convert_local_to_pose()` takes `use_local_location`, `use_inherit_rotation` into account which we don't want.
+        if org_no_local_location:
+            self.bdata.use_local_location = True
+        if org_no_inherit_rotation:
+            self.bdata.use_inherit_rotation = True
+        try:
+            # Convert Pose (in "global" armature space) -> Local (in rest-relative space) -> parent-relative. Confusing!
+            r = self.matrix_rest_local @ self.bdata.convert_local_to_pose(
+                saved_pose_matrix,
+                pbone.bone.matrix_local,
+                parent_matrix=pbone.parent.matrix,
+                parent_matrix_local=pbone.parent.bone.matrix_local,
+                invert=True  # Pose->Local, not Local->Pose.
+            )
+        finally:
+            if org_inherit_scale != inherit_scale_to_use:
+                self.bdata.inherit_scale = org_inherit_scale
+            if org_no_local_location:
+                self.bdata.use_local_location = False
+            if org_no_inherit_rotation:
+                self.bdata.use_inherit_rotation = False
+
+        return r
+
+    def get_inherit_type(self):
+        """
+        Get the inherit_type that the exporter should write. Also used by `get_matrix_local()` to determine how to
+        get the transform.
+
+        TODO:
+        Aside from FULL/RSrs, the rest of FBX's inherit_types don't have an exact match in Blender. The below examples
+        use a node chain A->B->C (A=root), with their rot/scale transforms: AR, AS, BR, BS, CR, CS.
+
+        FBX's Rrs can only choose to ignore the immediate parent's scale. To ignore the scale of an indirect parent,
+        all nodes in between have to also use Rrs. E.g.:
+            If B, C both use Rrs, you get:     AR @      BR @ CR @ CS.
+            If B is changed to RSrs, you get:  AR @ AS @ BR @ CR @ CS.
+        Blender's 'NONE' removes all inherited scale and shear before applying the current bone's scale.
+
+        FBX's RrSs only moves the child's rot transform right after the parent's. E.g.:
+            If B, C both use RrSs, you get:    AR @      BR @ CR @ AS @ BS @ CS.  (B, C have no shear here)
+            If B is changed to RSrs, you get:  AR @ AS @ BR @ CR @      BS @ CS.  (B, C *may* have shear)
+        Blender's 'ALIGNED' is like 'NONE', but it also copies the parent's final scale with shear removed, and applies
+        it to the current bone.
+        """
+        if self.is_bone and self.bdata.parent:
+            inherit_scale = self.bdata.inherit_scale
+            if inherit_scale in {'ALIGNED', 'NONE', 'AVERAGE'}:
+                # ALIGNED/NONE/AVERAGE are interchangeable here (each one's effect can be replicated with another).
+                # ALIGNED != RrSs, but in most cases it's a good substitute.
+                if api_compat.HAS_BONE_ALIGNED_INHERIT_SCALE:
+                    return 0  # RrSs
+                else:
+                    # ALIGNED didn't exist in pre-2.82 - we'll force NONE instead.
+                    return 2  # Rrs
+            else:
+                # FULL/NONE_LEGACY are also interchangeable. FIX_SHEAR can't be represented in FBX.
+                return 1  # RSrs
+        else:
+            return 1  # RSrs
+    inherit_type = property(get_inherit_type)
+    # UnDrew Add End
+
     def get_matrix_local(self):
         if self._tag == 'OB':
             return self.bdata.matrix_local.copy()
@@ -1777,42 +1856,9 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
             # PoseBone.matrix is in armature space, bring in back in real local one!
             par = self.bdata.parent
             # UnDrew Add Start : Deliberate support for other scale inheritance modes.
-            if par and self.inherit_type != 1:  # != RSrs
-                pbone = self._ref.pose.bones[self.bdata.name]
-                saved_pose_matrix = pbone.matrix.copy()  # Copy doesn't seem necessary, but better safe than sorry!
-
-                # So, for this case, I'm using a dedicated function for space conversions, which does it properly depending on
-                # the current bone settings. This function, unfortunately, works TOO WELL, because it also accounts for when
-                # the Local Location or Inherit Rotation bone settings are disabled, which isn't really desired here.
-                # Therefore, temporarily set those to True while converting.
-                # This seemingly has a bit of a cost (some update it runs?), but it isn't too dramatic, even in stress-tests.
-                #
-                # P.S.: Okay, so I probably coooouuuld figure how to mathematically account for those settings myself without
-                # having to toggle them, but I honestly can't be bothered. And tbh, this is more maintainable.
-                no_local_location = not self.bdata.use_local_location
-                no_inherit_rotation = not self.bdata.use_inherit_rotation
-                if no_local_location:
-                    self.bdata.use_local_location = True
-                if no_inherit_rotation:
-                    self.bdata.use_inherit_rotation = True
-
-                # Now convert Pose (in "global" armature space) to Local (in rest-relative space), and then
-                # convert THAT to parent-relative. Very confusing!
-                r = self.matrix_rest_local @ self.bdata.convert_local_to_pose(
-                    saved_pose_matrix,
-                    pbone.bone.matrix_local,
-                    parent_matrix=pbone.parent.matrix,
-                    parent_matrix_local=pbone.parent.bone.matrix_local,
-                    invert=True  # Invert means Pose to Local, not the default which is Local to Pose.
-                )
-
-                # Restore any changed settings.
-                if no_local_location:
-                    self.bdata.use_local_location = False
-                if no_inherit_rotation:
-                    self.bdata.use_inherit_rotation = False
-
-                return r
+            inherit_type = self.inherit_type
+            if par and inherit_type != 1:  # != RSrs
+                return self.get_bone_matrix_local_for_inherit_scale(par, 'ALIGNED' if inherit_type == 0 else 'NONE')
             # UnDrew Add End
             par_mat_inv = self._ref.pose.bones[par.name].matrix.inverted_safe() if par else Matrix()
             return par_mat_inv @ self._ref.pose.bones[self.bdata.name].matrix
@@ -1843,23 +1889,6 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         else:
             return self.matrix_global.copy()
     matrix_rest_global = property(get_matrix_rest_global)
-
-    # UnDrew Add Start : InheritType support. AHiT only seems to natively support RrSs (i.e. ALIGNED inheritance).
-    # TODO: This is not accurate when there's different inherit_scales in the same armature. Oh well!
-    def get_inherit_type(self):
-        if self.is_bone:
-            inherit_scale = self.bdata.inherit_scale
-            if inherit_scale in {'NONE', 'NONE_LEGACY'}:
-                return 2  # Rrs
-            elif inherit_scale == 'ALIGNED':
-                return 0  # RrSs
-            else:
-                return 1  # RSrs
-        else:
-            # TODO: See if regular objects have their own scale inheritance properties.
-            return 1  # RSrs
-    inherit_type = property(get_inherit_type)
-    # UnDrew Add End
 
     # #### Transform and helpers
     def has_valid_parent(self, objects):
