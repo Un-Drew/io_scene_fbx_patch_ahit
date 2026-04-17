@@ -406,11 +406,12 @@ class ImportFBX_patch_ahit(bpy.types.Operator, ImportHelper):
         default=DEF_IMPORT_CUSTOM_FPS_FIX,
     )
     # UnDrew Add End
-    # UnDrew Add Start : Fix for actions being created without initializing their id_root.
+    # UnDrew Add Start : Fix for pre-4.4 actions being created without initializing their id_root.
     UE3_set_action_id_root: BoolProperty(
         name="UE3 - Set action domains",
         description="Automatically makes imported actions only appear on the relevant Object/ID types. "
-                    "Useful to avoid accidently locking an action to the wrong type later down the line",
+                    "Useful to avoid accidently locking an action to the wrong type later down the line "
+                    "(e.g. accidently assigning a Key action to an Object or vice-versa)",
         default=DEF_IMPORT_ACTION_DOMAIN,
     )
     # UnDrew Add End
@@ -590,8 +591,9 @@ def import_panel_animation(body: bpy.types.UILayout, operator: bpy.types.Operato
     # UnDrew Add Start : Time dilation fix when using Custom FPS.
     body.prop(operator, "UE3_custom_fps_fix")
     # UnDrew Add End
-    # UnDrew Add Start : Fix for actions being created without initializing their id_root.
-    body.prop(operator, "UE3_set_action_id_root")
+    # UnDrew Add Start : Fix for pre-4.4 actions being created without initializing their id_root.
+    if not api_compat.HAS_ANIM_LAYERED_1_STABLE:
+        body.prop(operator, "UE3_set_action_id_root")
     # UnDrew Add End
 
 

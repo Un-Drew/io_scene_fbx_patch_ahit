@@ -1163,13 +1163,11 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
                         # 'stack name' would be a better choice?
                         action.slots.new(id_data.id_type, "Slot")
 
-                    # UnDrew Add Start : Set the proper id_root on the action/slot, so it isn't possible to irreparably
+                    # UnDrew Add Start : When pre-4.4, set the proper id_root on the action, so you can't irreparably
                     #                    lock it to the wrong type. E.g. Key action to an Object or vice-versa.
-                    if UE3_set_action_id_root:
-                        if api_compat.HAS_ANIM_LAYERED_1_STABLE:
-                            action.slots[0].target_id_type = get_id_type(id_data)
-                        else:
-                            action.id_root = get_id_type(id_data)
+                    #                    Not needed >= 4.4; `ActionSlots.new()` sets `ActionSlot.target_id_type` for us.
+                    if UE3_set_action_id_root and not api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                        action.id_root = get_id_type(id_data)
                     # UnDrew Add End
 
                 # If none yet assigned, assign this action to id_data.
