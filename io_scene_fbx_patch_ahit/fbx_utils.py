@@ -1,8 +1,3 @@
-# SPDX-FileCopyrightText: 2013 Campbell Barton
-# SPDX-FileCopyrightText: 2014 Bastien Montagne
-#
-# SPDX-License-Identifier: GPL-2.0-or-later
-
 import math
 import time
 
@@ -19,6 +14,22 @@ from bpy.types import Object, Bone, PoseBone, DepsgraphObjectInstance
 from mathutils import Vector, Matrix
 
 from . import encode_bin, data_types
+
+# COMPAT ADD BEGIN
+from . import fbx_api_compat as api_compat
+# COMPAT ADD END
+
+# COMPAT ADD BEGIN
+try:
+# COMPAT ADD END
+    math_prod = math.prod
+# COMPAT ADD BEGIN : prod() was only added in Python 3.8, so it may fail importing.
+except AttributeError:
+    from functools import reduce
+    from operator import mul
+    def math_prod(iterable, *, start=1):
+        return reduce(mul, iterable, start)
+# COMPAT ADD END
 
 
 # "Constants"
@@ -131,11 +142,11 @@ RIGHT_HAND_AXES = {
 }
 
 
-# NOTE: Not fully in enum value order, since when exporting the first entry matching the framerate value is used
-# (e.g. better have NTSC fullframe than NTSC drop frame for 29.97 framerate).
+# NOTE: Not fully in enum value order, since when exporting the first entry matching the frame-rate value is used
+# (e.g. better have NTSC full-frame than NTSC drop frame for 29.97 frame-rate).
 FBX_FRAMERATES = (
-    # (-1.0, 0),  # Default framerate.
-    (-1.0, 14),  # Custom framerate.
+    # (-1.0, 0),  # Default frame-rate.
+    (-1.0, 14),  # Custom frame-rate.
     (120.0, 1),
     (100.0, 2),
     (60.0, 3),
@@ -210,7 +221,7 @@ else:
 
 
 # Scale/unit mess. FBX can store the 'reference' unit of a file in its UnitScaleFactor property
-# (1.0 meaning centimeter, afaik). We use that to reflect user's default unit as set in Blender with scale_length.
+# (1.0 meaning centimeter, AFAIK). We use that to reflect user's default unit as set in Blender with scale_length.
 # However, we always get values in BU (i.e. meters), so we have to reverse-apply that scale in global matrix...
 # Note that when no default unit is available, we assume 'meters' (and hence scale by 100).
 def units_blender_to_fbx_factor(scene):
@@ -245,7 +256,7 @@ def units_convertor_iter(u_from, u_to):
 
     def convertor(it):
         for v in it:
-            yield(conv(v))
+            yield conv(v)
 
     return convertor
 
@@ -316,38 +327,49 @@ def similar_values_iter(v1, v2, e=1e-6):
     return True
 
 
-def shape_difference_exclude_similar(sv_cos, ref_cos, e=1e-6):
+def shape_difference_exclude_similar(sv_cos_nors, ref_cos_nors, e=1e-6):
     """Return a tuple of:
         the difference between the vertex cos in sv_cos and ref_cos, excluding any that are nearly the same,
+        the corresponding vertex normal differences,
         and the indices of the vertices that are not nearly the same"""
-    assert(sv_cos.size == ref_cos.size)
+    sv_cos, sv_nors = sv_cos_nors
+    ref_cos, ref_nors = ref_cos_nors
+    assert sv_cos.size == ref_cos.size == sv_nors.size == ref_nors.size
 
     # Create views of 1 co per row of the arrays, only making copies if needed.
     sv_cos = sv_cos.reshape(-1, 3)
+    sv_nors = sv_nors.reshape(-1, 3)
     ref_cos = ref_cos.reshape(-1, 3)
+    ref_nors = ref_nors.reshape(-1, 3)
 
     # Quick check for equality
     if np.array_equal(sv_cos, ref_cos):
         # There's no difference between the two arrays.
         empty_cos = np.empty((0, 3), dtype=sv_cos.dtype)
+        empty_nors = np.empty((0, 3), dtype=sv_nors.dtype)
         empty_indices = np.empty(0, dtype=np.int32)
-        return empty_cos, empty_indices
+        return empty_cos, empty_nors, empty_indices
 
     # Note that unlike math.isclose(a,b), np.isclose(a,b) is not symmetrical and the second argument 'b', is
     # considered to be the reference value.
     # Note that atol=0 will mean that if only one co component being compared is zero, they won't be considered close.
-    similar_mask = np.isclose(sv_cos, ref_cos, atol=0, rtol=e)
+    similar_mask_cos = np.isclose(sv_cos, ref_cos, atol=0, rtol=e)
 
-    # A co is only similar if every component in it is similar.
-    co_similar_mask = np.all(similar_mask, axis=1)
+    # Normal tolerance is higher because it's only meant to add a few extra vertices compared to position check,
+    # and deltas below 1e-4 would hardly be visually noticeable anyway.
+    similar_mask_nors = np.isclose(sv_nors, ref_nors, atol=1e-4, rtol=e)
+
+    # A vertex is only similar if every component in both its position and normal are similar.
+    similar_mask = np.all(similar_mask_cos & similar_mask_nors, axis=1)
 
     # Get the indices of cos that are not similar.
-    not_similar_verts_idx = np.flatnonzero(~co_similar_mask)
+    not_similar_verts_idx = np.flatnonzero(~similar_mask)
 
     # Subtracting first over the entire arrays and then indexing seems faster than indexing both arrays first and then
     # subtracting, until less than about 3% of the cos are being indexed.
     difference_cos = (sv_cos - ref_cos)[not_similar_verts_idx]
-    return difference_cos, not_similar_verts_idx
+    difference_nors = (sv_nors - ref_nors)[not_similar_verts_idx]
+    return difference_cos, difference_nors, not_similar_verts_idx
 
 
 def _mat4_vec3_array_multiply(mat4, vec3_array, dtype=None, return_4d=False):
@@ -365,7 +387,7 @@ def _mat4_vec3_array_multiply(mat4, vec3_array, dtype=None, return_4d=False):
 
     # Multiplying a 4d mathutils.Matrix by a 3d mathutils.Vector implicitly extends the Vector to 4d during the
     # calculation by appending 1.0 to the Vector and then the 4d result is truncated back to 3d.
-    # Numpy does not do an implicit extension to 4d, so it would have to be done explicitly by extending the entire
+    # NumPy does not do an implicit extension to 4d, so it would have to be done explicitly by extending the entire
     # vec3_array to 4d.
     # However, since the w component of the vectors is always 1.0, the last column can be excluded from the
     # multiplication and then added to every multiplied vector afterwards, which avoids having to make a 4d copy of
@@ -510,7 +532,7 @@ def fast_first_axis_flat(ar):
     Since the dtype of the view could sort in a different order to the dtype of the input array, this isn't typically
     useful for actual sorting, but it is useful for sorting-based uniqueness, such as np.unique."""
     # If there are no rows, each element will be viewed as the new dtype.
-    elements_per_row = math.prod(ar.shape[1:])
+    elements_per_row = math_prod(ar.shape[1:])
     row_itemsize = ar.itemsize * elements_per_row
 
     # Get a dtype with itemsize that equals row_itemsize.
@@ -544,7 +566,7 @@ def fast_first_axis_flat(ar):
 
 
 def fast_first_axis_unique(ar, return_unique=True, return_index=False, return_inverse=False, return_counts=False):
-    """np.unique with axis=0 but optimised for when the input array has multiple elements per row, and the returned
+    """np.unique with axis=0 but optimized for when the input array has multiple elements per row, and the returned
     unique array doesn't need to be sorted.
 
     Arrays with more than one element per row are more costly to sort in np.unique due to being compared one
@@ -561,10 +583,10 @@ def fast_first_axis_unique(ar, return_unique=True, return_index=False, return_in
     NaN values can have lots of different byte representations (e.g. signaling/quiet and custom payloads). Only the
     duplicates of each unique byte representation will be collapsed into one."""
     # At least something should always be returned.
-    assert(return_unique or return_index or return_inverse or return_counts)
+    assert return_unique or return_index or return_inverse or return_counts
     # Only signed integer, unsigned integer and floating-point kinds of data are allowed. Other kinds of data have not
     # been tested.
-    assert(ar.dtype.kind in "iuf")
+    assert ar.dtype.kind in "iuf"
 
     # Floating-point types have different byte representations for -0.0 and 0.0. Collapse them together by replacing all
     # -0.0 in the input array with 0.0.
@@ -662,7 +684,11 @@ def expand_shape_key_range(shape_key, value_to_fit):
     The new slider_min/slider_max is rounded down/up to the nearest whole number for a more visually pleasing result.
 
     Returns whether it was possible to expand the slider range to fit `value_to_fit`."""
-    if value_to_fit < (slider_min := shape_key.slider_min):
+    # COMPAT EDIT BEGIN : Removed use of the := ("walrus") operator (see: fbx_api_compat.HAS_PY_WALRUS).
+    slider_min = shape_key.slider_min
+    slider_max = shape_key.slider_max
+    if value_to_fit < slider_min:
+    # COMPAT EDIT END
         if value_to_fit < 0.0:
             # For the most common case, set slider_min to double value_to_fit.
             target_slider_min = value_to_fit * 2.0
@@ -674,7 +700,9 @@ def expand_shape_key_range(shape_key, value_to_fit):
         shape_key.slider_min = math.floor(target_slider_min)
 
         return value_to_fit >= SHAPE_KEY_SLIDER_HARD_MIN
-    elif value_to_fit > (slider_max := shape_key.slider_max):
+    # COMPAT EDIT BEGIN : Removed use of the := ("walrus") operator (see: fbx_api_compat.HAS_PY_WALRUS).
+    elif value_to_fit > slider_max:
+    # COMPAT EDIT END
         if value_to_fit > 0.0:
             # For the most common case, set slider_max to double value_to_fit.
             target_slider_max = value_to_fit * 2.0
@@ -742,6 +770,16 @@ def attribute_to_ndarray(attribute, foreach_attribute=None):
     return ndarray
 
 
+# COMPAT ADD BEGIN
+if not api_compat.HAS_MESH_ATTRIBUTES:
+    _type_attribute_group = object
+elif not api_compat.HAS_SPECIALIZED_ATTR_GROUP_TYPES:
+    _type_attribute_group = bpy.types.AttributeGroup
+else:
+# COMPAT ADD END
+    _type_attribute_group = bpy.types.AttributeGroupMesh
+
+
 @dataclass
 class AttributeDescription:
     """Helper class to reduce duplicate code for handling built-in Blender attributes."""
@@ -752,7 +790,7 @@ class AttributeDescription:
     domain: str
     # Some attributes are required to exist if certain conditions are met. If a required attribute does not exist when
     # attempting to get it, an AssertionError is raised.
-    is_required_check: Callable[[bpy.types.AttributeGroupMesh], bool] = None
+    is_required_check: Callable[[_type_attribute_group], bool] = None
     # NumPy dtype that matches the internal C data of this attribute.
     dtype: np.dtype = field(init=False)
     # The default attribute name to use with foreach_get and foreach_set.
@@ -819,17 +857,26 @@ class AttributeDescription:
 # Built-in Blender attributes
 # Only attributes used by the importer/exporter are included here.
 # See usage of BuiltinCustomDataLayerProvider in Blender source to find most built-in attributes.
-MESH_ATTRIBUTE_MATERIAL_INDEX = AttributeDescription("material_index", 'INT', 'FACE')
-MESH_ATTRIBUTE_POSITION = AttributeDescription("position", 'FLOAT_VECTOR', 'POINT',
-                                               is_required_check=lambda attributes: bool(attributes.id_data.vertices))
-MESH_ATTRIBUTE_SHARP_EDGE = AttributeDescription("sharp_edge", 'BOOLEAN', 'EDGE')
-MESH_ATTRIBUTE_EDGE_VERTS = AttributeDescription(".edge_verts", 'INT32_2D', 'EDGE',
-                                                 is_required_check=lambda attributes: bool(attributes.id_data.edges))
-MESH_ATTRIBUTE_CORNER_VERT = AttributeDescription(".corner_vert", 'INT', 'CORNER',
-                                                  is_required_check=lambda attributes: bool(attributes.id_data.loops))
-MESH_ATTRIBUTE_CORNER_EDGE = AttributeDescription(".corner_edge", 'INT', 'CORNER',
-                                                  is_required_check=lambda attributes: bool(attributes.id_data.loops))
-MESH_ATTRIBUTE_SHARP_FACE = AttributeDescription("sharp_face", 'BOOLEAN', 'FACE')
+# COMPAT EDIT BEGIN : If an attribute isn't part of the API yet, its corresponding desc var will now be False.
+MESH_ATTRIBUTE_MATERIAL_INDEX = api_compat.HAS_MESH_ATTR_MATERIAL_INDEX and \
+                AttributeDescription("material_index", 'INT', 'FACE')
+MESH_ATTRIBUTE_POSITION = api_compat.HAS_MESH_ATTR_POSITION and \
+                AttributeDescription("position", 'FLOAT_VECTOR', 'POINT',
+                                     is_required_check=lambda attributes: bool(attributes.id_data.vertices))
+MESH_ATTRIBUTE_SHARP_EDGE = api_compat.HAS_MESH_ATTR_SHARP_EDGE and \
+                AttributeDescription("sharp_edge", 'BOOLEAN', 'EDGE')
+MESH_ATTRIBUTE_EDGE_VERTS = api_compat.HAS_MESH_ATTR_EDGE_VERTS and \
+                AttributeDescription(".edge_verts", 'INT32_2D', 'EDGE',
+                                     is_required_check=lambda attributes: bool(attributes.id_data.edges))
+MESH_ATTRIBUTE_CORNER_VERT = api_compat.HAS_MESH_ATTRS_CORNER_VERT_AND_CORNER_EDGE and \
+                AttributeDescription(".corner_vert", 'INT', 'CORNER',
+                                     is_required_check=lambda attributes: bool(attributes.id_data.loops))
+MESH_ATTRIBUTE_CORNER_EDGE = api_compat.HAS_MESH_ATTRS_CORNER_VERT_AND_CORNER_EDGE and \
+                AttributeDescription(".corner_edge", 'INT', 'CORNER',
+                                     is_required_check=lambda attributes: bool(attributes.id_data.loops))
+MESH_ATTRIBUTE_SHARP_FACE = api_compat.HAS_MESH_ATTR_SHARP_FACE and \
+                AttributeDescription("sharp_face", 'BOOLEAN', 'FACE')
+# COMPAT END BEGIN
 
 
 # ##### UIDs code. #####
@@ -890,7 +937,7 @@ def get_key_from_fbx_uuid(uuid):
     """
     Return the key which generated this uid.
     """
-    assert(uuid.__class__ == UUID)
+    assert uuid.__class__ == UUID
     return _uuids_to_keys.get(uuid, None)
 
 
@@ -1299,7 +1346,7 @@ class AnimationCurveNodeWrapper:
 
     def __init__(self, elem_key, kind, force_keying, force_startend_keying, default_values=...):
         self.elem_keys = [elem_key]
-        assert(kind in self.kinds)
+        assert kind in self.kinds
         self.fbx_group = [self.kinds[kind][0]]
         self.fbx_gname = [self.kinds[kind][1]]
         self.fbx_props = [self.kinds[kind][2]]
@@ -1309,7 +1356,7 @@ class AnimationCurveNodeWrapper:
         self._frame_values_array = None
         self._frame_write_mask_array = None
         if default_values is not ...:
-            assert(len(default_values) == len(self.fbx_props[0]))
+            assert len(default_values) == len(self.fbx_props[0])
             self.default_values = default_values
         else:
             self.default_values = (0.0) * len(self.fbx_props[0])
@@ -1320,10 +1367,10 @@ class AnimationCurveNodeWrapper:
 
     def add_group(self, elem_key, fbx_group, fbx_gname, fbx_props):
         """
-        Add another whole group stuff (curvenode, animated item/prop + curvnode/curve identifiers).
-        E.g. Shapes animations is written twice, houra!
+        Add another whole group stuff (curve-node, animated item/prop + curve-node/curve identifiers).
+        E.g. Shapes animations is written twice, horror!
         """
-        assert(len(fbx_props) == len(self.fbx_props[0]))
+        assert len(fbx_props) == len(self.fbx_props[0])
         self.elem_keys.append(elem_key)
         self.fbx_group.append(fbx_group)
         self.fbx_gname.append(fbx_gname)
@@ -1339,9 +1386,9 @@ class AnimationCurveNodeWrapper:
         if len(keyframe_values.shape) == 1:
             keyframe_values = keyframe_values[np.newaxis]
         # There must be a time for each column of values.
-        assert(len(keyframe_times) == keyframe_values.shape[1])
+        assert len(keyframe_times) == keyframe_values.shape[1]
         # There must be as many rows of values as there are properties.
-        assert(len(self.fbx_props[0]) == len(keyframe_values))
+        assert len(self.fbx_props[0]) == len(keyframe_values)
         write_mask = np.full_like(keyframe_values, True, dtype=bool)  # write everything by default
         self._frame_times_array = keyframe_times
         self._frame_values_array = keyframe_values
@@ -1363,7 +1410,7 @@ class AnimationCurveNodeWrapper:
         min_reldiff_fac = fac * 1.0e-3  # min relative value evolution: 0.1% of current 'order of magnitude'.
         min_absdiff_fac = 0.1  # A tenth of reldiff...
 
-        # Initialise to no values enabled for writing.
+        # Initialize to no values enabled for writing.
         self._frame_write_mask_array[:] = False
 
         # Values are enabled for writing if they differ enough from either of their adjacent values or if they differ
@@ -1607,7 +1654,7 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
     This class provides a same common interface for all (FBX-wise) object-like elements:
     * Blender Object
     * Blender Bone and PoseBone
-    * Blender DepsgraphObjectInstance (for dulis).
+    * Blender DepsgraphObjectInstance (for duplis).
     Note since a same Blender object might be 'mapped' to several FBX models (esp. with duplis),
     we need to use a key to identify each.
     """
@@ -1643,7 +1690,8 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         bdata might be an Object (deprecated), DepsgraphObjectInstance, Bone or PoseBone.
         If Bone or PoseBone, armature Object must be provided.
         """
-        # Note: DepsgraphObjectInstance are purely runtime data, they become invalid as soon as we step to the next item!
+        # Note: DepsgraphObjectInstance are purely runtime data,
+        #       they become invalid as soon as we step to the next item!
         #       Hence we have to immediately copy *all* needed data...
         if isinstance(bdata, Object):  # DEPRECATED
             self._tag = 'OB'
@@ -1720,6 +1768,85 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         return None
     bdata_pose_bone = property(get_bdata_pose_bone)
 
+    # UnDrew Add Start : InheritType support. AHiT only natively supports RrSs, or Rrs which it can losslessly convert.
+    def get_bone_matrix_local_for_inherit_scale(self, par, inherit_scale_to_use):
+        """
+        Get the parent-relative loc, rot, scale of a bone with a forced inherit_scale. This isn't quite a "real"
+        transform matrix (not meant to converted in global space), but it's needed like this for `fbx_object_matrix()`,
+        so it can be used by `fbx_object_tx()`.
+        """
+        pbone = self._ref.pose.bones[self.bdata.name]
+        saved_pose_matrix = pbone.matrix.copy()
+
+        org_inherit_scale = self.bdata.inherit_scale
+        org_no_local_location = not self.bdata.use_local_location
+        org_no_inherit_rotation = not self.bdata.use_inherit_rotation
+
+        if org_inherit_scale != inherit_scale_to_use:
+            self.bdata.inherit_scale = inherit_scale_to_use
+        # `convert_local_to_pose()` takes `use_local_location`, `use_inherit_rotation` into account which we don't want.
+        if org_no_local_location:
+            self.bdata.use_local_location = True
+        if org_no_inherit_rotation:
+            self.bdata.use_inherit_rotation = True
+        try:
+            # Convert Pose (in "global" armature space) -> Local (in rest-relative space) -> parent-relative. Confusing!
+            r = self.matrix_rest_local @ self.bdata.convert_local_to_pose(
+                saved_pose_matrix,
+                pbone.bone.matrix_local,
+                parent_matrix=pbone.parent.matrix,
+                parent_matrix_local=pbone.parent.bone.matrix_local,
+                invert=True  # Pose->Local, not Local->Pose.
+            )
+        finally:
+            if org_inherit_scale != inherit_scale_to_use:
+                self.bdata.inherit_scale = org_inherit_scale
+            if org_no_local_location:
+                self.bdata.use_local_location = False
+            if org_no_inherit_rotation:
+                self.bdata.use_inherit_rotation = False
+
+        return r
+
+    def get_inherit_type(self):
+        """
+        Get the inherit_type that the exporter should write. Also used by `get_matrix_local()` to determine how to
+        get the transform.
+
+        TODO:
+        Aside from FULL/RSrs, the rest of FBX's inherit_types don't have an exact match in Blender. The below examples
+        use a node chain A->B->C (A=root), with their rot/scale transforms: AR, AS, BR, BS, CR, CS.
+
+        FBX's Rrs can only choose to ignore the immediate parent's scale. To ignore the scale of an indirect parent,
+        all nodes in between have to also use Rrs. E.g.:
+            If B, C both use Rrs, you get:     AR @      BR @ CR @ CS.
+            If B is changed to RSrs, you get:  AR @ AS @ BR @ CR @ CS.
+        Blender's 'NONE' removes all inherited scale and shear before applying the current bone's scale.
+
+        FBX's RrSs only moves the child's rot transform right after the parent's. E.g.:
+            If B, C both use RrSs, you get:    AR @      BR @ CR @ AS @ BS @ CS.  (B, C have no shear here)
+            If B is changed to RSrs, you get:  AR @ AS @ BR @ CR @      BS @ CS.  (B, C *may* have shear)
+        Blender's 'ALIGNED' is like 'NONE', but it also copies the parent's final scale with shear removed, and applies
+        it to the current bone.
+        """
+        if self.is_bone and self.bdata.parent:
+            inherit_scale = self.bdata.inherit_scale
+            if inherit_scale in {'ALIGNED', 'NONE', 'AVERAGE'}:
+                # ALIGNED/NONE/AVERAGE are interchangeable here (each one's effect can be replicated with another).
+                # ALIGNED != RrSs, but in most cases it's a good substitute.
+                if api_compat.HAS_BONE_ALIGNED_INHERIT_SCALE:
+                    return 0  # RrSs
+                else:
+                    # ALIGNED didn't exist in pre-2.82 - we'll force NONE instead.
+                    return 2  # Rrs
+            else:
+                # FULL/NONE_LEGACY are also interchangeable. FIX_SHEAR can't be represented in FBX.
+                return 1  # RSrs
+        else:
+            return 1  # RSrs
+    inherit_type = property(get_inherit_type)
+    # UnDrew Add End
+
     def get_matrix_local(self):
         if self._tag == 'OB':
             return self.bdata.matrix_local.copy()
@@ -1729,42 +1856,9 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
             # PoseBone.matrix is in armature space, bring in back in real local one!
             par = self.bdata.parent
             # UnDrew Add Start : Deliberate support for other scale inheritance modes.
-            if par and self.inherit_type != 1:  # != RSrs
-                pbone = self._ref.pose.bones[self.bdata.name]
-                saved_pose_matrix = pbone.matrix.copy()  # Copy doesn't seem necessary, but better safe than sorry!
-
-                # So, for this case, I'm using a dedicated function for space conversions, which does it properly depending on
-                # the current bone settings. This function, unfortunately, works TOO WELL, because it also accounts for when
-                # the Local Location or Inherit Rotation bone settings are disabled, which isn't really desired here.
-                # Therefore, temporarily set those to True while converting.
-                # This seemingly has a bit of a cost (some update it runs?), but it isn't too dramatic, even in stress-tests.
-                #
-                # P.S.: Okay, so I probably coooouuuld figure how to mathematically account for those settings myself without
-                # having to toggle them, but I honestly can't be bothered. And tbh, this is more maintainable.
-                no_local_location = not self.bdata.use_local_location
-                no_inherit_rotation = not self.bdata.use_inherit_rotation
-                if no_local_location:
-                    self.bdata.use_local_location = True
-                if no_inherit_rotation:
-                    self.bdata.use_inherit_rotation = True
-
-                # Now convert Pose (in "global" armature space) to Local (in rest-relative space), and then
-                # convert THAT to parent-relative. Very confusing!
-                r = self.matrix_rest_local @ self.bdata.convert_local_to_pose(
-                    saved_pose_matrix,
-                    pbone.bone.matrix_local,
-                    parent_matrix=pbone.parent.matrix,
-                    parent_matrix_local=pbone.parent.bone.matrix_local,
-                    invert=True  # Invert means Pose to Local, not the default which is Local to Pose.
-                )
-
-                # Restore any changed settings.
-                if no_local_location:
-                    self.bdata.use_local_location = False
-                if no_inherit_rotation:
-                    self.bdata.use_inherit_rotation = False
-
-                return r
+            inherit_type = self.inherit_type
+            if par and inherit_type != 1:  # != RSrs
+                return self.get_bone_matrix_local_for_inherit_scale(par, 'ALIGNED' if inherit_type == 0 else 'NONE')
             # UnDrew Add End
             par_mat_inv = self._ref.pose.bones[par.name].matrix.inverted_safe() if par else Matrix()
             return par_mat_inv @ self._ref.pose.bones[self.bdata.name].matrix
@@ -1795,23 +1889,6 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         else:
             return self.matrix_global.copy()
     matrix_rest_global = property(get_matrix_rest_global)
-
-    # UnDrew Add Start : InheritType support. AHiT only seems to natively support RrSs (i.e. ALIGNED inheritance).
-    # TODO: This is not accurate when there's different inherit_scales in the same armature. Oh well!
-    def get_inherit_type(self):
-        if self.is_bone:
-            inherit_scale = self.bdata.inherit_scale
-            if inherit_scale in {'NONE', 'NONE_LEGACY'}:
-                return 2  # Rrs
-            elif inherit_scale == 'ALIGNED':
-                return 0  # RrSs
-            else:
-                return 1  # RSrs
-        else:
-            # TODO: See if regular objects have their own scale inheritance properties.
-            return 1  # RSrs
-    inherit_type = property(get_inherit_type)
-    # UnDrew Add End
 
     # #### Transform and helpers
     def has_valid_parent(self, objects):
@@ -1954,7 +2031,7 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         matrix = self.fbx_object_matrix(scene_data, rest=rest)
         loc, rot, scale = matrix.decompose()
         matrix_rot = rot.to_matrix()
-        # quat -> euler, we always use 'XYZ' order, use ref rotation if given.
+        # Quaternion -> euler, we always use 'XYZ' order, use ref rotation if given.
         if rot_euler_compat is not None:
             rot = rot.to_euler('XYZ', rot_euler_compat)
         else:
@@ -2079,5 +2156,5 @@ FBXImportSettings = namedtuple("FBXImportSettings", (
     # UnDrew Add Start : New settings that need to be passed to the importer's "settings" var.
     "UE3_import_root_as_bone", "UE3_import_scale_inheritance", "UE3_connect_children",
     # UnDrew Add End
-    "use_prepost_rot", "colors_type",
+    "use_prepost_rot", "colors_type", "mtl_name_collision_mode",
 ))

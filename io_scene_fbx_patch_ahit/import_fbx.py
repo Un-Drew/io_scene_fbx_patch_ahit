@@ -1,12 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
-
-# Script copyright (C) Blender Foundation
-
-# FBX 7.1.0 -> 7.4.0 loader for Blender
-
-# Not totally pep8 compliant.
-#   pep8 import_fbx.py --ignore=E501,E123,E702,E125
-
 if "bpy" in locals():
     import importlib
     if "parse_fbx" in locals():
@@ -14,9 +5,20 @@ if "bpy" in locals():
     if "fbx_utils" in locals():
         importlib.reload(fbx_utils)
 
+# COMPAT ADD BEGIN
+from . import fbx_api_compat as api_compat
+# COMPAT ADD END
+
 import bpy
-from bpy.app.translations import pgettext_tip as tip_
-from mathutils import Matrix, Euler, Vector
+# COMPAT ADD BEGIN
+if not api_compat.HAS_TRANSLATION_FOR_REPORTS:
+    # No report translation in this version, so fallback to tool-tip translation.
+    from bpy.app.translations import pgettext_tip as rpt_
+# COMPAT ADD END
+else:
+    from bpy.app.translations import pgettext_rpt as rpt_
+from mathutils import Matrix, Euler, Vector, Quaternion
+from bpy_extras import anim_utils
 
 # Also imported in .fbx_utils, so importing here is unlikely to further affect Blender startup time.
 import numpy as np
@@ -41,7 +43,19 @@ from .fbx_utils import (
     nors_transformed,
     parray_as_ndarray,
     astype_view_signedness,
+    MESH_ATTRIBUTE_MATERIAL_INDEX,
+    MESH_ATTRIBUTE_POSITION,
+    MESH_ATTRIBUTE_EDGE_VERTS,
+    MESH_ATTRIBUTE_CORNER_VERT,
+    MESH_ATTRIBUTE_SHARP_FACE,
+    MESH_ATTRIBUTE_SHARP_EDGE,
+    expand_shape_key_range,
+    FBX_KTIME_V7,
+    FBX_KTIME_V8,
+    FBX_TIMECODE_DEFINITION_TO_KTIME_PER_SECOND,
 )
+
+LINEAR_INTERPOLATION_VALUE = bpy.types.Keyframe.bl_rna.properties['interpolation'].enum_items['LINEAR'].value
 
 # global singleton, assign on execution
 fbx_elem_nil = None
@@ -55,7 +69,7 @@ MAT_CONVERT_CAMERA = fbx_utils.MAT_CONVERT_CAMERA.inverted()
 
 
 def validate_blend_names(name):
-    assert(type(name) == bytes)
+    assert type(name) == bytes
     # Blender typically does not accept names over 63 bytes...
     if len(name) > 63:
         import hashlib
@@ -87,8 +101,8 @@ def elem_find_iter(elem, id_search):
 def elem_find_first_string(elem, id_search):
     fbx_item = elem_find_first(elem, id_search)
     if fbx_item is not None and fbx_item.props:  # Do not error on complete empty properties (see T45291).
-        assert(len(fbx_item.props) == 1)
-        assert(fbx_item.props_type[0] == data_types.STRING)
+        assert len(fbx_item.props) == 1
+        assert fbx_item.props_type[0] == data_types.STRING
         return fbx_item.props[0].decode('utf-8', 'replace')
     return None
 
@@ -96,8 +110,8 @@ def elem_find_first_string(elem, id_search):
 def elem_find_first_string_as_bytes(elem, id_search):
     fbx_item = elem_find_first(elem, id_search)
     if fbx_item is not None and fbx_item.props:  # Do not error on complete empty properties (see T45291).
-        assert(len(fbx_item.props) == 1)
-        assert(fbx_item.props_type[0] == data_types.STRING)
+        assert len(fbx_item.props) == 1
+        assert fbx_item.props_type[0] == data_types.STRING
         return fbx_item.props[0]  # Keep it as bytes as requested...
     return None
 
@@ -105,8 +119,8 @@ def elem_find_first_string_as_bytes(elem, id_search):
 def elem_find_first_bytes(elem, id_search, decode=True):
     fbx_item = elem_find_first(elem, id_search)
     if fbx_item is not None and fbx_item.props:  # Do not error on complete empty properties (see T45291).
-        assert(len(fbx_item.props) == 1)
-        assert(fbx_item.props_type[0] == data_types.BYTES)
+        assert len(fbx_item.props) == 1
+        assert fbx_item.props_type[0] == data_types.BYTES
         return fbx_item.props[0]
     return None
 
@@ -118,11 +132,11 @@ def elem_repr(elem):
         ", ".join([repr(p) for p in elem.props]),
         # elem.props_type,
         b", ".join([e.id for e in elem.elems]),
-        )
+    )
 
 
 def elem_split_name_class(elem):
-    assert(elem.props_type[-2] == data_types.STRING)
+    assert elem.props_type[-2] == data_types.STRING
     elem_name, elem_class = elem.props[-2].split(b'\x00\x01')
     return elem_name, elem_class
 
@@ -130,28 +144,28 @@ def elem_split_name_class(elem):
 def elem_name_ensure_class(elem, clss=...):
     elem_name, elem_class = elem_split_name_class(elem)
     if clss is not ...:
-        assert(elem_class == clss)
+        assert elem_class == clss
     return validate_blend_names(elem_name)
 
 
 def elem_name_ensure_classes(elem, clss=...):
     elem_name, elem_class = elem_split_name_class(elem)
     if clss is not ...:
-        assert(elem_class in clss)
+        assert elem_class in clss
     return validate_blend_names(elem_name)
 
 
 def elem_split_name_class_nodeattr(elem):
-    assert(elem.props_type[-2] == data_types.STRING)
+    assert elem.props_type[-2] == data_types.STRING
     elem_name, elem_class = elem.props[-2].split(b'\x00\x01')
-    assert(elem_class == b'NodeAttribute')
-    assert(elem.props_type[-1] == data_types.STRING)
+    assert elem_class == b'NodeAttribute'
+    assert elem.props_type[-1] == data_types.STRING
     elem_class = elem.props[-1]
     return elem_name, elem_class
 
 
 def elem_uuid(elem):
-    assert(elem.props_type[0] == data_types.INT64)
+    assert elem.props_type[0] == data_types.INT64
     return elem.props[0]
 
 
@@ -162,23 +176,25 @@ def elem_prop_first(elem, default=None):
 # ----
 # Support for
 # Properties70: { ... P:
+# Custom properties ("user properties" in FBX) are ignored here and get handled separately (see #104773).
 def elem_props_find_first(elem, elem_prop_id):
     if elem is None:
         # When properties are not found... Should never happen, but happens - as usual.
         return None
     # support for templates (tuple of elems)
     if type(elem) is not FBXElem:
-        assert(type(elem) is tuple)
+        assert type(elem) is tuple
         for e in elem:
             result = elem_props_find_first(e, elem_prop_id)
             if result is not None:
                 return result
-        assert(len(elem) > 0)
+        assert len(elem) > 0
         return None
 
     for subelem in elem.elems:
-        assert(subelem.id == b'P')
-        if subelem.props[0] == elem_prop_id:
+        assert subelem.id == b'P'
+        # 'U' flag indicates that the property has been defined by the user.
+        if subelem.props[0] == elem_prop_id and b'U' not in subelem.props[3]:
             return subelem
     return None
 
@@ -186,15 +202,15 @@ def elem_props_find_first(elem, elem_prop_id):
 def elem_props_get_color_rgb(elem, elem_prop_id, default=None):
     elem_prop = elem_props_find_first(elem, elem_prop_id)
     if elem_prop is not None:
-        assert(elem_prop.props[0] == elem_prop_id)
+        assert elem_prop.props[0] == elem_prop_id
         if elem_prop.props[1] == b'Color':
             # FBX version 7300
-            assert(elem_prop.props[1] == b'Color')
-            assert(elem_prop.props[2] == b'')
+            assert elem_prop.props[1] == b'Color'
+            assert elem_prop.props[2] == b''
         else:
-            assert(elem_prop.props[1] == b'ColorRGB')
-            assert(elem_prop.props[2] == b'Color')
-        assert(elem_prop.props_type[4:7] == bytes((data_types.FLOAT64,)) * 3)
+            assert elem_prop.props[1] == b'ColorRGB'
+            assert elem_prop.props[2] == b'Color'
+        assert elem_prop.props_type[4:7] == bytes((data_types.FLOAT64,)) * 3
         return elem_prop.props[4:7]
     return default
 
@@ -202,7 +218,7 @@ def elem_props_get_color_rgb(elem, elem_prop_id, default=None):
 def elem_props_get_vector_3d(elem, elem_prop_id, default=None):
     elem_prop = elem_props_find_first(elem, elem_prop_id)
     if elem_prop is not None:
-        assert(elem_prop.props_type[4:7] == bytes((data_types.FLOAT64,)) * 3)
+        assert elem_prop.props_type[4:7] == bytes((data_types.FLOAT64,)) * 3
         return elem_prop.props[4:7]
     return default
 
@@ -210,16 +226,16 @@ def elem_props_get_vector_3d(elem, elem_prop_id, default=None):
 def elem_props_get_number(elem, elem_prop_id, default=None):
     elem_prop = elem_props_find_first(elem, elem_prop_id)
     if elem_prop is not None:
-        assert(elem_prop.props[0] == elem_prop_id)
+        assert elem_prop.props[0] == elem_prop_id
         if elem_prop.props[1] == b'double':
-            assert(elem_prop.props[1] == b'double')
-            assert(elem_prop.props[2] == b'Number')
+            assert elem_prop.props[1] == b'double'
+            assert elem_prop.props[2] == b'Number'
         else:
-            assert(elem_prop.props[1] == b'Number')
-            assert(elem_prop.props[2] == b'')
+            assert elem_prop.props[1] == b'Number'
+            assert elem_prop.props[2] == b''
 
         # we could allow other number types
-        assert(elem_prop.props_type[4] == data_types.FLOAT64)
+        assert elem_prop.props_type[4] == data_types.FLOAT64
 
         return elem_prop.props[4]
     return default
@@ -228,16 +244,16 @@ def elem_props_get_number(elem, elem_prop_id, default=None):
 def elem_props_get_integer(elem, elem_prop_id, default=None):
     elem_prop = elem_props_find_first(elem, elem_prop_id)
     if elem_prop is not None:
-        assert(elem_prop.props[0] == elem_prop_id)
+        assert elem_prop.props[0] == elem_prop_id
         if elem_prop.props[1] == b'int':
-            assert(elem_prop.props[1] == b'int')
-            assert(elem_prop.props[2] == b'Integer')
+            assert elem_prop.props[1] == b'int'
+            assert elem_prop.props[2] == b'Integer'
         elif elem_prop.props[1] == b'ULongLong':
-            assert(elem_prop.props[1] == b'ULongLong')
-            assert(elem_prop.props[2] == b'')
+            assert elem_prop.props[1] == b'ULongLong'
+            assert elem_prop.props[2] == b''
 
         # we could allow other number types
-        assert(elem_prop.props_type[4] in {data_types.INT32, data_types.INT64})
+        assert elem_prop.props_type[4] in {data_types.INT32, data_types.INT64}
 
         return elem_prop.props[4]
     return default
@@ -246,14 +262,14 @@ def elem_props_get_integer(elem, elem_prop_id, default=None):
 def elem_props_get_bool(elem, elem_prop_id, default=None):
     elem_prop = elem_props_find_first(elem, elem_prop_id)
     if elem_prop is not None:
-        assert(elem_prop.props[0] == elem_prop_id)
+        assert elem_prop.props[0] == elem_prop_id
         # b'Bool' with a capital seems to be used for animated property... go figure...
-        assert(elem_prop.props[1] in {b'bool', b'Bool'})
-        assert(elem_prop.props[2] == b'')
+        assert elem_prop.props[1] in {b'bool', b'Bool'}
+        assert elem_prop.props[2] == b''
 
         # we could allow other number types
-        assert(elem_prop.props_type[4] == data_types.INT32)
-        assert(elem_prop.props[4] in {0, 1})
+        assert elem_prop.props_type[4] == data_types.INT32
+        assert elem_prop.props[4] in {0, 1}
 
         return bool(elem_prop.props[4])
     return default
@@ -262,13 +278,13 @@ def elem_props_get_bool(elem, elem_prop_id, default=None):
 def elem_props_get_enum(elem, elem_prop_id, default=None):
     elem_prop = elem_props_find_first(elem, elem_prop_id)
     if elem_prop is not None:
-        assert(elem_prop.props[0] == elem_prop_id)
-        assert(elem_prop.props[1] == b'enum')
-        assert(elem_prop.props[2] == b'')
-        assert(elem_prop.props[3] == b'')
+        assert elem_prop.props[0] == elem_prop_id
+        assert elem_prop.props[1] == b'enum'
+        assert elem_prop.props[2] == b''
+        assert elem_prop.props[3] == b''
 
         # we could allow other number types
-        assert(elem_prop.props_type[4] == data_types.INT32)
+        assert elem_prop.props_type[4] == data_types.INT32
 
         return elem_prop.props[4]
     return default
@@ -277,12 +293,12 @@ def elem_props_get_enum(elem, elem_prop_id, default=None):
 def elem_props_get_visibility(elem, elem_prop_id, default=None):
     elem_prop = elem_props_find_first(elem, elem_prop_id)
     if elem_prop is not None:
-        assert(elem_prop.props[0] == elem_prop_id)
-        assert(elem_prop.props[1] == b'Visibility')
-        assert(elem_prop.props[2] == b'')
+        assert elem_prop.props[0] == elem_prop_id
+        assert elem_prop.props[1] == b'Visibility'
+        assert elem_prop.props[2] == b''
 
         # we could allow other number types
-        assert(elem_prop.props_type[4] == data_types.FLOAT64)
+        assert elem_prop.props_type[4] == data_types.FLOAT64
 
         return elem_prop.props[4]
     return default
@@ -311,13 +327,16 @@ def blen_read_custom_properties(fbx_obj, blen_obj, settings):
     fbx_obj_props = elem_find_first(fbx_obj, b'Properties70')
     if fbx_obj_props:
         for fbx_prop in fbx_obj_props.elems:
-            assert(fbx_prop.id == b'P')
+            assert fbx_prop.id == b'P'
 
             if b'U' in fbx_prop.props[3]:
                 if fbx_prop.props[0] == b'UDP3DSMAX':
                     # Special case for 3DS Max user properties:
-                    assert(fbx_prop.props[1] == b'KString')
-                    assert(fbx_prop.props_type[4] == data_types.STRING)
+                    try:
+                        assert fbx_prop.props[1] == b'KString'
+                    except AssertionError as exc:
+                        print(exc)
+                    assert fbx_prop.props_type[4] == data_types.STRING
                     items = fbx_prop.props[4].decode('utf-8', 'replace')
                     for item in items.split('\r\n'):
                         if item:
@@ -334,42 +353,45 @@ def blen_read_custom_properties(fbx_obj, blen_obj, settings):
                     prop_name = validate_blend_names(fbx_prop.props[0])
                     prop_type = fbx_prop.props[1]
                     if prop_type in {b'Vector', b'Vector3D', b'Color', b'ColorRGB'}:
-                        assert(fbx_prop.props_type[4:7] == bytes((data_types.FLOAT64,)) * 3)
+                        assert fbx_prop.props_type[4:7] == bytes((data_types.FLOAT64,)) * 3
                         blen_obj[prop_name] = fbx_prop.props[4:7]
                     elif prop_type in {b'Vector4', b'ColorRGBA'}:
-                        assert(fbx_prop.props_type[4:8] == bytes((data_types.FLOAT64,)) * 4)
+                        assert fbx_prop.props_type[4:8] == bytes((data_types.FLOAT64,)) * 4
                         blen_obj[prop_name] = fbx_prop.props[4:8]
                     elif prop_type == b'Vector2D':
-                        assert(fbx_prop.props_type[4:6] == bytes((data_types.FLOAT64,)) * 2)
+                        assert fbx_prop.props_type[4:6] == bytes((data_types.FLOAT64,)) * 2
                         blen_obj[prop_name] = fbx_prop.props[4:6]
                     elif prop_type in {b'Integer', b'int'}:
-                        assert(fbx_prop.props_type[4] == data_types.INT32)
+                        assert fbx_prop.props_type[4] == data_types.INT32
                         blen_obj[prop_name] = fbx_prop.props[4]
                     elif prop_type == b'KString':
-                        assert(fbx_prop.props_type[4] == data_types.STRING)
+                        assert fbx_prop.props_type[4] == data_types.STRING
                         blen_obj[prop_name] = fbx_prop.props[4].decode('utf-8', 'replace')
                     elif prop_type in {b'Number', b'double', b'Double'}:
-                        assert(fbx_prop.props_type[4] == data_types.FLOAT64)
+                        assert fbx_prop.props_type[4] == data_types.FLOAT64
                         blen_obj[prop_name] = fbx_prop.props[4]
                     elif prop_type in {b'Float', b'float'}:
-                        assert(fbx_prop.props_type[4] == data_types.FLOAT32)
+                        assert fbx_prop.props_type[4] == data_types.FLOAT32
                         blen_obj[prop_name] = fbx_prop.props[4]
                     elif prop_type in {b'Bool', b'bool'}:
-                        assert(fbx_prop.props_type[4] == data_types.INT32)
+                        assert fbx_prop.props_type[4] == data_types.INT32
                         blen_obj[prop_name] = fbx_prop.props[4] != 0
                     elif prop_type in {b'Enum', b'enum'}:
-                        assert(fbx_prop.props_type[4:6] == bytes((data_types.INT32, data_types.STRING)))
+                        assert fbx_prop.props_type[4:6] == bytes((data_types.INT32, data_types.STRING))
                         val = fbx_prop.props[4]
                         if settings.use_custom_props_enum_as_string and fbx_prop.props[5]:
                             enum_items = fbx_prop.props[5].decode('utf-8', 'replace').split('~')
                             if val >= 0 and val < len(enum_items):
                                 blen_obj[prop_name] = enum_items[val]
                             else:
-                                print ("WARNING: User property '%s' has wrong enum value, skipped" % prop_name)
+                                print("WARNING: User property '%s' has wrong enum value, skipped" % prop_name)
                         else:
                             blen_obj[prop_name] = val
                     else:
-                        print ("WARNING: User property type '%s' is not supported" % prop_type.decode('utf-8', 'replace'))
+                        print(
+                            "WARNING: User property type '%s' is not supported" %
+                            prop_type.decode(
+                                'utf-8', 'replace'))
 
 
 def blen_read_object_transform_do(transform_data):
@@ -420,7 +442,7 @@ def blen_read_object_transform_do(transform_data):
     geom_loc = Matrix.Translation(transform_data.geom_loc)
 
     # rotation
-    to_rot = lambda rot, rot_ord: Euler(convert_deg_to_rad_iter(rot), rot_ord).to_matrix().to_4x4()
+    def to_rot(rot, rot_ord): return Euler(convert_deg_to_rad_iter(rot), rot_ord).to_matrix().to_4x4()
     lcl_rot = to_rot(transform_data.rot, transform_data.rot_ord) @ transform_data.rot_alt_mat
     pre_rot = to_rot(transform_data.pre_rot, 'XYZ')
     pst_rot = to_rot(transform_data.pst_rot, 'XYZ')
@@ -434,7 +456,7 @@ def blen_read_object_transform_do(transform_data):
     # scale
     lcl_scale = Matrix()
     lcl_scale[0][0], lcl_scale[1][1], lcl_scale[2][2] = transform_data.sca
-    geom_scale = Matrix();
+    geom_scale = Matrix()
     geom_scale[0][0], geom_scale[1][1], geom_scale[2][2] = transform_data.geom_sca
 
     base_mat = (
@@ -455,10 +477,10 @@ def blen_read_object_transform_do(transform_data):
     return (base_mat @ geom_mat, base_mat, geom_mat)
 
 
-# XXX This might be weak, now that we can add vgroups from both bones and shapes, name collisions become
-#     more likely, will have to make this more robust!!!
+# XXX This might be weak, now that we can add vertex-groups from both bones and shapes,
+#     name collisions become more likely, will have to make this more robust!!!
 def add_vgroup_to_objects(vg_indices, vg_weights, vg_name, objects):
-    assert(len(vg_indices) == len(vg_weights))
+    assert len(vg_indices) == len(vg_weights)
     if vg_indices:
         for obj in objects:
             # We replace/override here...
@@ -505,7 +527,7 @@ def blen_read_object_transform_preprocess(fbx_props, fbx_obj, rot_alt_mat, use_p
             4: 'ZXY',
             5: 'ZYX',
             6: 'XYZ',  # XXX eSphericXYZ, not really supported...
-            }.get(elem_props_get_enum(fbx_props, b'RotationOrder', 0))
+        }.get(elem_props_get_enum(fbx_props, b'RotationOrder', 0))
     else:
         pre_rot = const_vector_zero_3d
         pst_rot = const_vector_zero_3d
@@ -527,75 +549,406 @@ def blen_read_object_transform_preprocess(fbx_props, fbx_obj, rot_alt_mat, use_p
 
 # ---------
 # Animation
-def blen_read_animations_curves_iter(fbx_curves, blen_start_offset, fbx_start_offset, fps):
-    """
-    Get raw FBX AnimCurve list, and yield values for all curves at each singular curves' keyframes,
-    together with (blender) timing, in frames.
-    blen_start_offset is expected in frames, while fbx_start_offset is expected in FBX ktime.
-    """
-    # As a first step, assume linear interpolation between key frames, we'll (try to!) handle more
-    # of FBX curves later.
-    from .fbx_utils import FBX_KTIME
-    timefac = fps / FBX_KTIME
+def _blen_read_object_transform_do_anim(transform_data, lcl_translation_mat, lcl_rot_euler, lcl_scale_mat,
+                                        extra_pre_matrix, extra_post_matrix):
+    """Specialized version of blen_read_object_transform_do for animation that pre-calculates the non-animated matrices
+    and returns a function that calculates (base_mat @ geom_mat). See the comments in blen_read_object_transform_do for
+    a full description of what this function is doing.
 
-    curves = tuple([0,
-                    elem_prop_first(elem_find_first(c[2], b'KeyTime')),
-                    elem_prop_first(elem_find_first(c[2], b'KeyValueFloat')),
-                    c]
-                   for c in fbx_curves)
+    The lcl_translation_mat, lcl_rot_euler and lcl_scale_mat arguments should have their values updated each frame and
+    then calling the returned function will calculate the matrix for the current frame.
 
-    allkeys = sorted({item for sublist in curves for item in sublist[1]})
-    for curr_fbxktime in allkeys:
-        curr_values = []
-        for item in curves:
-            idx, times, values, fbx_curve = item
+    extra_pre_matrix and extra_post_matrix are any extra matrices to multiply first/last."""
+    # Translation
+    geom_loc = Matrix.Translation(transform_data.geom_loc)
 
-            if times[idx] < curr_fbxktime:
+    # Rotation
+    def to_rot_xyz(rot):
+        # All the rotations that can be pre-calculated have a fixed XYZ order.
+        return Euler(convert_deg_to_rad_iter(rot), 'XYZ').to_matrix().to_4x4()
+    pre_rot = to_rot_xyz(transform_data.pre_rot)
+    pst_rot_inv = to_rot_xyz(transform_data.pst_rot).inverted_safe()
+    geom_rot = to_rot_xyz(transform_data.geom_rot)
+
+    # Offsets and pivots
+    rot_ofs = Matrix.Translation(transform_data.rot_ofs)
+    rot_piv = Matrix.Translation(transform_data.rot_piv)
+    rot_piv_inv = rot_piv.inverted_safe()
+    sca_ofs = Matrix.Translation(transform_data.sca_ofs)
+    sca_piv = Matrix.Translation(transform_data.sca_piv)
+    sca_piv_inv = sca_piv.inverted_safe()
+
+    # Scale
+    geom_scale = Matrix()
+    geom_scale[0][0], geom_scale[1][1], geom_scale[2][2] = transform_data.geom_sca
+
+    # Some matrices can be combined in advance, using the associative property of matrix multiplication, so that less
+    # matrix multiplication is required each frame.
+    geom_mat = geom_loc @ geom_rot @ geom_scale
+    post_lcl_translation = rot_ofs @ rot_piv @ pre_rot
+    post_lcl_rotation = transform_data.rot_alt_mat @ pst_rot_inv @ rot_piv_inv @ sca_ofs @ sca_piv
+    post_lcl_scaling = sca_piv_inv @ geom_mat @ extra_post_matrix
+
+    # Get the bound to_matrix method to avoid re-binding it on each call.
+    lcl_rot_euler_to_matrix_3x3 = lcl_rot_euler.to_matrix
+    # Get the unbound Matrix.to_4x4 method to avoid having to look it up again on each call.
+    matrix_to_4x4 = Matrix.to_4x4
+
+    if extra_pre_matrix == Matrix():
+        # There aren't any other matrices that must be multiplied before lcl_translation_mat that extra_pre_matrix can
+        # be combined with, so skip extra_pre_matrix when it's the identity matrix.
+        return lambda: (lcl_translation_mat @
+                        post_lcl_translation @
+                        matrix_to_4x4(lcl_rot_euler_to_matrix_3x3()) @
+                        post_lcl_rotation @
+                        lcl_scale_mat @
+                        post_lcl_scaling)
+    else:
+        return lambda: (extra_pre_matrix @
+                        lcl_translation_mat @
+                        post_lcl_translation @
+                        matrix_to_4x4(lcl_rot_euler_to_matrix_3x3()) @
+                        post_lcl_rotation @
+                        lcl_scale_mat @
+                        post_lcl_scaling)
+
+
+def _transformation_curves_gen(item, values_arrays, channel_keys):
+    """Yields flattened location/rotation/scaling values for imported PoseBone/Object Lcl Translation/Rotation/Scaling
+    animation curve values.
+
+    The value arrays must have the same lengths, where each index of each array corresponds to a single keyframe.
+
+    Each value array must have a corresponding channel key tuple that identifies the fbx property
+    (b'Lcl Translation'/b'Lcl Rotation'/b'Lcl Scaling') and the channel (x/y/z as 0/1/2) of that property."""
+    from operator import setitem
+    from functools import partial
+
+    if item.is_bone:
+        bl_obj = item.bl_obj.pose.bones[item.bl_bone]
+    else:
+        bl_obj = item.bl_obj
+
+    rot_mode = bl_obj.rotation_mode
+    transform_data = item.fbx_transform_data
+    rot_eul_prev = bl_obj.rotation_euler.copy()
+    rot_quat_prev = bl_obj.rotation_quaternion.copy()
+
+    # Pre-compute combined pre-matrix
+    # Remove that rest pose matrix from current matrix (also in parent space) by computing the inverted local rest
+    # matrix of the bone, if relevant.
+    combined_pre_matrix = item.get_bind_matrix().inverted_safe() if item.is_bone else Matrix()
+    # item.pre_matrix will contain any correction for a parent's correction matrix or the global matrix
+    if item.pre_matrix:
+        combined_pre_matrix @= item.pre_matrix
+
+    # Pre-compute combined post-matrix
+    # Compensate for changes in the local matrix during processing
+    combined_post_matrix = item.anim_compensation_matrix.copy() if item.anim_compensation_matrix else Matrix()
+    # item.post_matrix will contain any correction for lights, camera and bone orientation
+    if item.post_matrix:
+        combined_post_matrix @= item.post_matrix
+
+    # Create matrices/euler from the initial transformation values of this item.
+    # These variables will be updated in-place as we iterate through each frame.
+    lcl_translation_mat = Matrix.Translation(transform_data.loc)
+    lcl_rotation_eul = Euler(convert_deg_to_rad_iter(transform_data.rot), transform_data.rot_ord)
+    lcl_scaling_mat = Matrix()
+    lcl_scaling_mat[0][0], lcl_scaling_mat[1][1], lcl_scaling_mat[2][2] = transform_data.sca
+
+    # Create setters into lcl_translation_mat, lcl_rotation_eul and lcl_scaling_mat for each values_array and convert
+    # any rotation values into radians.
+    lcl_setters = []
+    values_arrays_converted = []
+    for values_array, (fbx_prop, channel) in zip(values_arrays, channel_keys):
+        if fbx_prop == b'Lcl Translation':
+            # lcl_translation_mat.translation[channel] = value
+            setter = partial(setitem, lcl_translation_mat.translation, channel)
+        elif fbx_prop == b'Lcl Rotation':
+            # FBX rotations are in degrees, but Blender uses radians, so convert all rotation values in advance.
+            values_array = np.deg2rad(values_array)
+            # lcl_rotation_eul[channel] = value
+            setter = partial(setitem, lcl_rotation_eul, channel)
+        else:
+            assert fbx_prop == b'Lcl Scaling'
+            # lcl_scaling_mat[channel][channel] = value
+            setter = partial(setitem, lcl_scaling_mat[channel], channel)
+        lcl_setters.append(setter)
+        values_arrays_converted.append(values_array)
+
+    # Create an iterator that gets one value from each array. Each iterated tuple will be all the imported
+    # Lcl Translation/Lcl Rotation/Lcl Scaling values for a single frame, in that order.
+    # Note that an FBX animation does not have to animate all the channels, so only the animated channels of each
+    # property will be present.
+    # .data, the memoryview of an np.ndarray, is faster to iterate than the ndarray itself.
+    frame_values_it = zip(*(arr.data for arr in values_arrays_converted))
+
+    # Getting the unbound methods in advance avoids having to look them up again on each call within the loop.
+    mat_decompose = Matrix.decompose
+    quat_to_axis_angle = Quaternion.to_axis_angle
+    quat_to_euler = Quaternion.to_euler
+    quat_dot = Quaternion.dot
+
+    calc_mat = _blen_read_object_transform_do_anim(transform_data,
+                                                   lcl_translation_mat, lcl_rotation_eul, lcl_scaling_mat,
+                                                   combined_pre_matrix, combined_post_matrix)
+
+    # Iterate through the values for each frame.
+    for frame_values in frame_values_it:
+        # Set each value into its corresponding lcl matrix/euler.
+        for lcl_setter, value in zip(lcl_setters, frame_values):
+            lcl_setter(value)
+
+        # Calculate the updated matrix for this frame.
+        mat = calc_mat()
+
+        # Now we have a virtual matrix of transform from AnimCurves, we can yield keyframe values!
+        loc, rot, sca = mat_decompose(mat)
+        if rot_mode == 'QUATERNION':
+            if quat_dot(rot_quat_prev, rot) < 0.0:
+                rot = -rot
+            rot_quat_prev = rot
+        elif rot_mode == 'AXIS_ANGLE':
+            vec, ang = quat_to_axis_angle(rot)
+            rot = ang, vec.x, vec.y, vec.z
+        else:  # Euler
+            rot = quat_to_euler(rot, rot_mode, rot_eul_prev)
+            rot_eul_prev = rot
+
+        # Yield order matches the order that the location/rotation/scale FCurves are created in.
+        yield from loc
+        yield from rot
+        yield from sca
+
+
+def _combine_curve_keyframe_times(times_and_values_tuples, initial_values):
+    """Combine multiple parsed animation curves, that affect different channels, such that every animation curve
+    contains the keyframes from every other curve, interpolating the values for the newly inserted keyframes in each
+    curve.
+
+    Currently, linear interpolation is assumed, but FBX does store how keyframes should be interpolated, so correctly
+    interpolating the keyframe values is a TODO."""
+    if len(times_and_values_tuples) == 1:
+        # Nothing to do when there is only a single curve.
+        times, values = times_and_values_tuples[0]
+        return times, [values]
+
+    all_times = [t[0] for t in times_and_values_tuples]
+
+    # Get the combined sorted unique times of all the curves.
+    sorted_all_times = np.unique(np.concatenate(all_times))
+
+    values_arrays = []
+    for (times, values), initial_value in zip(times_and_values_tuples, initial_values):
+        if sorted_all_times.size == times.size:
+            # `sorted_all_times` will always contain all values in `times` and both `times` and `sorted_all_times` must
+            # be strictly increasing, so if both arrays have the same size, they must be identical.
+            extended_values = values
+        else:
+            # For now, linear interpolation is assumed. NumPy conveniently has a fast C-compiled function for this.
+            # Efficiently implementing other FBX supported interpolation will most likely be much more complicated.
+            extended_values = np.interp(sorted_all_times, times, values, left=initial_value)
+        values_arrays.append(extended_values)
+    return sorted_all_times, values_arrays
+
+
+def blen_read_invalid_animation_curve(key_times, key_values):
+    """FBX will parse animation curves even when their keyframe times are invalid (not strictly increasing). It's
+    unclear exactly how FBX handles invalid curves, but this matches in some cases and is how the FBX IO addon has been
+    handling invalid keyframe times for a long time.
+
+    Notably, this function will also correctly parse valid animation curves, though is much slower than the trivial,
+    regular way.
+
+    The returned keyframe times are guaranteed to be strictly increasing."""
+    sorted_unique_times = np.unique(key_times)
+
+    # Unsure if this can be vectorized with numpy, so using iteration for now.
+    def index_gen():
+        idx = 0
+        key_times_data = key_times.data
+        key_times_len = len(key_times)
+        # Iterating .data, the memoryview of the array, is faster than iterating the array directly.
+        for curr_fbxktime in sorted_unique_times.data:
+            if key_times_data[idx] < curr_fbxktime:
                 if idx >= 0:
                     idx += 1
-                    if idx >= len(times):
+                    if idx >= key_times_len:
                         # We have reached our last element for this curve, stay on it from now on...
                         idx = -1
-                    item[0] = idx
+            yield idx
 
-            if times[idx] >= curr_fbxktime:
-                if idx == 0:
-                    curr_values.append((values[idx], fbx_curve))
-                else:
-                    # Interpolate between this key and the previous one.
-                    ifac = (curr_fbxktime - times[idx - 1]) / (times[idx] - times[idx - 1])
-                    curr_values.append(((values[idx] - values[idx - 1]) * ifac + values[idx - 1], fbx_curve))
-        curr_blenkframe = (curr_fbxktime - fbx_start_offset) * timefac + blen_start_offset
-        yield (curr_blenkframe, curr_values)
+    indices = np.fromiter(index_gen(), dtype=np.int64, count=len(sorted_unique_times))
+    indexed_times = key_times[indices]
+    indexed_values = key_values[indices]
+
+    # Linear interpolate the value for each time in sorted_unique_times according to the times and values at each index
+    # and the previous index.
+    interpolated_values = np.empty_like(indexed_values)
+
+    # Where the index is 0, there's no previous value to interpolate from, so we set the value without interpolating.
+    # Because the indices are in increasing order, all zeroes must be at the start, so we can find the index of the last
+    # zero and use that to index with a slice instead of a boolean array for performance.
+    # Equivalent to, but as a slice:
+    # idx_zero_mask = indices == 0
+    # idx_nonzero_mask = ~idx_zero_mask
+    first_nonzero_idx = np.searchsorted(indices, 0, side='right')
+    idx_zero_slice = slice(0, first_nonzero_idx)  # [:first_nonzero_idx]
+    idx_nonzero_slice = slice(first_nonzero_idx, None)  # [first_nonzero_idx:]
+
+    interpolated_values[idx_zero_slice] = indexed_values[idx_zero_slice]
+
+    indexed_times_nonzero_idx = indexed_times[idx_nonzero_slice]
+    indexed_values_nonzero_idx = indexed_values[idx_nonzero_slice]
+    indices_nonzero = indices[idx_nonzero_slice]
+
+    prev_indices_nonzero = indices_nonzero - 1
+    prev_indexed_times_nonzero_idx = key_times[prev_indices_nonzero]
+    prev_indexed_values_nonzero_idx = key_values[prev_indices_nonzero]
+
+    ifac_a = sorted_unique_times[idx_nonzero_slice] - prev_indexed_times_nonzero_idx
+    ifac_b = indexed_times_nonzero_idx - prev_indexed_times_nonzero_idx
+    # If key_times contains two (or more) duplicate times in a row, then values in `ifac_b` can be zero which would
+    # result in division by zero.
+    # Use the `np.errstate` context manager to suppress printing the RuntimeWarning to the system console.
+    with np.errstate(divide='ignore'):
+        ifac = ifac_a / ifac_b
+    interpolated_values[idx_nonzero_slice] = ((indexed_values_nonzero_idx - prev_indexed_values_nonzero_idx) * ifac
+                                              + prev_indexed_values_nonzero_idx)
+
+    # If the time to interpolate at is larger than the time in indexed_times, then the value has been extrapolated.
+    # Extrapolated values are excluded.
+    valid_mask = indexed_times >= sorted_unique_times
+
+    key_times = sorted_unique_times[valid_mask]
+    key_values = interpolated_values[valid_mask]
+
+    return key_times, key_values
 
 
-def blen_read_animations_action_item(action, item, cnodes, fps, anim_offset, global_scale):
+def _convert_fbx_time_to_blender_time(key_times, blen_start_offset, fbx_start_offset, fps, fbx_ktime):
+    timefac = fps / fbx_ktime
+
+    # Convert from FBX timing to Blender timing.
+    # Cannot subtract in-place because key_times could be read directly from FBX and could be used by multiple Actions.
+    key_times = key_times - fbx_start_offset
+    # FBX times are integers and timefac is a Python float, so the new array will be a np.float64 array.
+    key_times = key_times * timefac
+
+    key_times += blen_start_offset
+
+    return key_times
+
+
+def blen_read_animation_curve(fbx_curve):
+    """Read an animation curve from FBX data.
+
+    The parsed keyframe times are guaranteed to be strictly increasing."""
+    key_times = parray_as_ndarray(elem_prop_first(elem_find_first(fbx_curve, b'KeyTime')))
+    key_values = parray_as_ndarray(elem_prop_first(elem_find_first(fbx_curve, b'KeyValueFloat')))
+
+    assert len(key_values) == len(key_times)
+
+    # The FBX SDK specifies that only one key per time is allowed and that the keys are sorted in time order.
+    # https://help.autodesk.com/view/FBX/2020/ENU/?guid=FBX_Developer_Help_cpp_ref_class_fbx_anim_curve_html
+    all_times_strictly_increasing = (key_times[1:] > key_times[:-1]).all()
+
+    if all_times_strictly_increasing:
+        return key_times, key_values
+    else:
+        # FBX will still read animation curves even if they are invalid.
+        return blen_read_invalid_animation_curve(key_times, key_values)
+
+
+def blen_store_keyframes(fbx_key_times, blen_fcurve, key_values, blen_start_offset, fps, fbx_ktime, fbx_start_offset=0):
+    """Set all keyframe times and values for a newly created FCurve.
+    Linear interpolation is currently assumed.
+
+    This is a convenience function for calling blen_store_keyframes_multi with only a single fcurve and values array."""
+    blen_store_keyframes_multi(fbx_key_times, [(blen_fcurve, key_values)], blen_start_offset, fps, fbx_ktime,
+                               fbx_start_offset)
+
+
+def blen_store_keyframes_multi(fbx_key_times, fcurve_and_key_values_pairs, blen_start_offset, fps, fbx_ktime,
+                               fbx_start_offset=0):
+    """Set all keyframe times and values for multiple pairs of newly created FCurves and keyframe values arrays, where
+    each pair has the same keyframe times.
+    Linear interpolation is currently assumed."""
+    bl_key_times = _convert_fbx_time_to_blender_time(fbx_key_times, blen_start_offset, fbx_start_offset, fps, fbx_ktime)
+    num_keys = len(bl_key_times)
+
+    # Compatible with C float type
+    bl_keyframe_dtype = np.single
+    # Compatible with C char type
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_EXTENDED_DNA_TYPES_4_1:
+        bl_enum_dtype = np.byte
+    else:
+    # COMPAT ADD END
+        bl_enum_dtype = np.ubyte
+
+    # The keyframe_points 'co' are accessed as flattened pairs of (time, value).
+    # The key times are the same for each (blen_fcurve, key_values) pair, so only the values need to be updated for each
+    # array of values.
+    keyframe_points_co = np.empty(len(bl_key_times) * 2, dtype=bl_keyframe_dtype)
+    # Even indices are times.
+    keyframe_points_co[0::2] = bl_key_times
+
+    # COMPAT ADD BEGIN
+    if api_compat.HAS_FOREACH_SET_ENUM_SUPPORT:
+    # COMPAT ADD END
+        interpolation_array = np.full(num_keys, LINEAR_INTERPOLATION_VALUE, dtype=bl_enum_dtype)
+
+    for blen_fcurve, key_values in fcurve_and_key_values_pairs:
+        # The fcurve must be newly created and thus have no keyframe_points.
+        assert len(blen_fcurve.keyframe_points) == 0
+
+        # Odd indices are values.
+        keyframe_points_co[1::2] = key_values
+
+        # Add the keyframe points to the FCurve and then set the 'co' and 'interpolation' of each point.
+        blen_fcurve.keyframe_points.add(num_keys)
+        blen_fcurve.keyframe_points.foreach_set('co', keyframe_points_co)
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_FOREACH_SET_ENUM_SUPPORT:
+            # Pre-2.90 versions don't provide any way to set this more efficiently... I think.
+            for key in blen_fcurve.keyframe_points:
+                key.interpolation = 'LINEAR'
+        else:
+        # COMPAT ADD END
+            blen_fcurve.keyframe_points.foreach_set('interpolation', interpolation_array)
+
+        # Since we inserted our keyframes in 'ultra-fast' mode, we have to update the fcurves now.
+        blen_fcurve.update()
+
+
+# COMPAT EDIT BEGIN: Changed def to reflect that it supports both channelbags and actions.
+def blen_read_animations_action_item(channelbag_or_act, item, cnodes, fps, anim_offset, global_scale, shape_key_deforms,
+                                     fbx_ktime):
     """
-    'Bake' loc/rot/scale into the action,
+    'Bake' loc/rot/scale into the channelbag/action,
     taking any pre_ and post_ matrix into account to transform from fbx into blender space.
     """
-    from bpy.types import Object, PoseBone, ShapeKey, Material, Camera
-    from itertools import chain
+# COMPAT EDIT END
+    from bpy.types import ShapeKey, Material, Camera
 
-    fbx_curves = []
+    fbx_curves: dict[bytes, dict[int, FBXElem]] = {}
     for curves, fbxprop in cnodes.values():
+        channels_dict = fbx_curves.setdefault(fbxprop, {})
         for (fbx_acdata, _blen_data), channel in curves.values():
-            fbx_curves.append((fbxprop, channel, fbx_acdata))
+            if channel in channels_dict:
+                # Ignore extra curves when one has already been found for this channel because FBX's default animation
+                # system implementation only uses the first curve assigned to a channel.
+                # Additional curves per channel are allowed by the FBX specification, but the handling of these curves
+                # is considered the responsibility of the application that created them. Note that each curve node is
+                # expected to have a unique set of channels, so these additional curves with the same channel would have
+                # to belong to separate curve nodes. See the FBX SDK documentation for FbxAnimCurveNode.
+                continue
+            channels_dict[channel] = fbx_acdata
 
     # Leave if no curves are attached (if a blender curve is attached to scale but without keys it defaults to 0).
     if len(fbx_curves) == 0:
         return
-
-    blen_curves = []
-    props = []
-    keyframes = {}
-
-    # Add each keyframe to the keyframe dict
-    def store_keyframe(fc, frame, value):
-        fc_key = (fc.data_path, fc.array_index)
-        if not keyframes.get(fc_key):
-            keyframes[fc_key] = []
-        keyframes[fc_key].extend((frame, value))
 
     if isinstance(item, Material):
         grpname = item.name
@@ -626,121 +979,125 @@ def blen_read_animations_action_item(action, item, cnodes, fps, anim_offset, glo
         else:  # Euler
             props[1] = (bl_obj.path_from_id("rotation_euler"), 3, grpname or "Euler Rotation")
 
-    blen_curves = [action.fcurves.new(prop, index=channel, action_group=grpname)
-                   for prop, nbr_channels, grpname in props for channel in range(nbr_channels)]
+    # COMPAT ADD BEGIN
+    if isinstance(channelbag_or_act, bpy.types.Action):
+        blen_curves = [channelbag_or_act.fcurves.new(prop, index=channel, action_group=grpname)
+                       for prop, nbr_channels, grpname in props for channel in range(nbr_channels)]
+    else:
+    # COMPAT ADD END
+    # COMPAT EDIT BEGIN: Renamed channelbag -> channelbag_or_act
+        blen_curves = [channelbag_or_act.fcurves.new(prop, index=channel, group_name=grpname)
+                       for prop, nbr_channels, grpname in props for channel in range(nbr_channels)]
+    # COMPAT EDIT END
 
     if isinstance(item, Material):
-        for frame, values in blen_read_animations_curves_iter(fbx_curves, anim_offset, 0, fps):
-            value = [0,0,0]
-            for v, (fbxprop, channel, _fbx_acdata) in values:
-                assert(fbxprop == b'DiffuseColor')
-                assert(channel in {0, 1, 2})
-                value[channel] = v
-
-            for fc, v in zip(blen_curves, value):
-                store_keyframe(fc, frame, v)
+        for fbxprop, channel_to_curve in fbx_curves.items():
+            assert fbxprop == b'DiffuseColor'
+            for channel, curve in channel_to_curve.items():
+                assert channel in {0, 1, 2}
+                blen_curve = blen_curves[channel]
+                fbx_key_times, values = blen_read_animation_curve(curve)
+                blen_store_keyframes(fbx_key_times, blen_curve, values, anim_offset, fps, fbx_ktime)
 
     elif isinstance(item, ShapeKey):
-        for frame, values in blen_read_animations_curves_iter(fbx_curves, anim_offset, 0, fps):
-            value = 0.0
-            for v, (fbxprop, channel, _fbx_acdata) in values:
-                assert(fbxprop == b'DeformPercent')
-                assert(channel == 0)
-                value = v / 100.0
+        for fbxprop, channel_to_curve in fbx_curves.items():
+            assert fbxprop == b'DeformPercent'
+            for channel, curve in channel_to_curve.items():
+                assert channel == 0
+                blen_curve = blen_curves[channel]
 
-            for fc, v in zip(blen_curves, (value,)):
-                store_keyframe(fc, frame, v)
+                fbx_key_times, values = blen_read_animation_curve(curve)
+                # A fully activated shape key in FBX DeformPercent is 100.0 whereas it is 1.0 in Blender.
+                values = values / 100.0
+                blen_store_keyframes(fbx_key_times, blen_curve, values, anim_offset, fps, fbx_ktime)
+
+                # Store the minimum and maximum shape key values, so that the shape key's slider range can be expanded
+                # if necessary after reading all animations.
+                if values.size:
+                    deform_values = shape_key_deforms.setdefault(item, [])
+                    deform_values.append(values.min())
+                    deform_values.append(values.max())
 
     elif isinstance(item, Camera):
-        for frame, values in blen_read_animations_curves_iter(fbx_curves, anim_offset, 0, fps):
-            focal_length = 0.0
-            focus_distance = 0.0
-            for v, (fbxprop, channel, _fbx_acdata) in values:
-                assert(fbxprop == b'FocalLength' or fbxprop == b'FocusDistance' )
-                assert(channel == 0)
-                if (fbxprop == b'FocalLength' ):
-                    focal_length = v
-                elif(fbxprop == b'FocusDistance'):
-                    focus_distance = v / 1000 * global_scale
+        for fbxprop, channel_to_curve in fbx_curves.items():
+            is_focus_distance = fbxprop == b'FocusDistance'
+            assert fbxprop == b'FocalLength' or is_focus_distance
+            for channel, curve in channel_to_curve.items():
+                assert channel == 0
+                # The indices are determined by the creation of the `props` list above.
+                blen_curve = blen_curves[1 if is_focus_distance else 0]
 
-            for fc, v in zip(blen_curves, (focal_length, focus_distance)):
-                store_keyframe(fc, frame, v)
+                fbx_key_times, values = blen_read_animation_curve(curve)
+                if is_focus_distance:
+                    # Remap the imported values from FBX to Blender.
+                    values = values / 1000.0
+                    values *= global_scale
+                blen_store_keyframes(fbx_key_times, blen_curve, values, anim_offset, fps, fbx_ktime)
 
     else:  # Object or PoseBone:
-        if item.is_bone:
-            bl_obj = item.bl_obj.pose.bones[item.bl_bone]
-        else:
-            bl_obj = item.bl_obj
-
         transform_data = item.fbx_transform_data
-        rot_eul_prev = bl_obj.rotation_euler.copy()
-        rot_quat_prev = bl_obj.rotation_quaternion.copy()
 
-        # Pre-compute inverted local rest matrix of the bone, if relevant.
-        restmat_inv = item.get_bind_matrix().inverted_safe() if item.is_bone else None
+        # Each transformation curve needs to have keyframes at the times of every other transformation curve
+        # (interpolating missing values), so that we can construct a matrix at every keyframe.
+        transform_prop_to_attr = {
+            b'Lcl Translation': transform_data.loc,
+            b'Lcl Rotation': transform_data.rot,
+            b'Lcl Scaling': transform_data.sca,
+        }
 
-        for frame, values in blen_read_animations_curves_iter(fbx_curves, anim_offset, 0, fps):
-            for v, (fbxprop, channel, _fbx_acdata) in values:
-                if fbxprop == b'Lcl Translation':
-                    transform_data.loc[channel] = v
-                elif fbxprop == b'Lcl Rotation':
-                    transform_data.rot[channel] = v
-                elif fbxprop == b'Lcl Scaling':
-                    transform_data.sca[channel] = v
-            mat, _, _ = blen_read_object_transform_do(transform_data)
+        times_and_values_tuples = []
+        initial_values = []
+        channel_keys = []
+        for fbxprop, channel_to_curve in fbx_curves.items():
+            if fbxprop not in transform_prop_to_attr:
+                # Currently, we only care about transformation curves.
+                continue
+            for channel, curve in channel_to_curve.items():
+                assert channel in {0, 1, 2}
+                fbx_key_times, values = blen_read_animation_curve(curve)
 
-            # compensate for changes in the local matrix during processing
-            if item.anim_compensation_matrix:
-                mat = mat @ item.anim_compensation_matrix
+                channel_keys.append((fbxprop, channel))
 
-            # apply pre- and post matrix
-            # post-matrix will contain any correction for lights, camera and bone orientation
-            # pre-matrix will contain any correction for a parent's correction matrix or the global matrix
-            if item.pre_matrix:
-                mat = item.pre_matrix @ mat
-            if item.post_matrix:
-                mat = mat @ item.post_matrix
+                initial_values.append(transform_prop_to_attr[fbxprop][channel])
 
-            # And now, remove that rest pose matrix from current mat (also in parent space).
-            if restmat_inv:
-                mat = restmat_inv @ mat
+                times_and_values_tuples.append((fbx_key_times, values))
+        if not times_and_values_tuples:
+            # If `times_and_values_tuples` is empty, all the imported animation curves are for properties other than
+            # transformation (e.g. animated custom properties), so there is nothing to do until support for those other
+            # properties is added.
+            return
 
-            # Now we have a virtual matrix of transform from AnimCurves, we can insert keyframes!
-            loc, rot, sca = mat.decompose()
-            if rot_mode == 'QUATERNION':
-                if rot_quat_prev.dot(rot) < 0.0:
-                    rot = -rot
-                rot_quat_prev = rot
-            elif rot_mode == 'AXIS_ANGLE':
-                vec, ang = rot.to_axis_angle()
-                rot = ang, vec.x, vec.y, vec.z
-            else:  # Euler
-                rot = rot.to_euler(rot_mode, rot_eul_prev)
-                rot_eul_prev = rot
+        # Combine the keyframe times of all the transformation curves so that each curve has a value at every time.
+        combined_fbx_times, values_arrays = _combine_curve_keyframe_times(times_and_values_tuples, initial_values)
 
-            # Add each keyframe and its value to the keyframe dict
-            for fc, value in zip(blen_curves, chain(loc, rot, sca)):
-                store_keyframe(fc, frame, value)
+        # Convert from FBX Lcl Translation/Lcl Rotation/Lcl Scaling to the Blender location/rotation/scaling properties
+        # of this Object/PoseBone.
+        # The number of fcurves for the Blender properties varies depending on the rotation mode.
+        num_loc_channels = 3
+        num_rot_channels = 4 if rot_mode in {'QUATERNION', 'AXIS_ANGLE'} else 3  # Variations of EULER are all 3
+        num_sca_channels = 3
+        num_channels = num_loc_channels + num_rot_channels + num_sca_channels
+        num_frames = len(combined_fbx_times)
+        full_length = num_channels * num_frames
 
-    # Add all keyframe points to the fcurves at once and modify them after
-    for fc_key, key_values in keyframes.items():
-        data_path, index = fc_key
+        # Do the conversion.
+        flattened_channel_values_gen = _transformation_curves_gen(item, values_arrays, channel_keys)
+        flattened_channel_values = np.fromiter(flattened_channel_values_gen, dtype=np.single, count=full_length)
 
-        # Add all keyframe points at once
-        fcurve = action.fcurves.find(data_path=data_path, index=index)
-        num_keys = len(key_values) // 2
-        fcurve.keyframe_points.add(num_keys)
-        fcurve.keyframe_points.foreach_set('co', key_values)
-        linear_enum_value = bpy.types.Keyframe.bl_rna.properties['interpolation'].enum_items['LINEAR'].value
-        fcurve.keyframe_points.foreach_set('interpolation', (linear_enum_value,) * num_keys)
+        # Reshape to one row per frame and then view the transpose so that each row corresponds to a single channel.
+        # e.g.
+        # loc_channels = channel_values[:num_loc_channels]
+        # rot_channels = channel_values[num_loc_channels:num_loc_channels + num_rot_channels]
+        # sca_channels = channel_values[num_loc_channels + num_rot_channels:]
+        channel_values = flattened_channel_values.reshape(num_frames, num_channels).T
 
-    # Since we inserted our keyframes in 'ultra-fast' mode, we have to update the fcurves now.
-    for fc in blen_curves:
-        fc.update()
+        # Each channel has the same keyframe times, so the combined times can be passed once along with all the curves
+        # and values arrays.
+        blen_store_keyframes_multi(combined_fbx_times, zip(blen_curves, channel_values), anim_offset, fps, fbx_ktime)
 
 
 # UnDrew Edit Start : Pass the FPS fix setting.
-def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_offset, UE3_custom_fps_fix, UE3_set_action_id_root, global_scale):
+def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_offset, UE3_custom_fps_fix, UE3_set_action_id_root, global_scale, fbx_ktime):
 # UnDrew Edit End
     """
     Recreate an action per stack/layer/object combinations.
@@ -749,23 +1106,19 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
     """
     from bpy.types import ShapeKey, Material, Camera
 
-    # UnDrew Add Start : The ID.id_type property was only introduced in 4.1, so this is my own hacky substitute for that.
-    # 99% of people won't even end up export these things, even on accident. Why did I put so much effort in this????
-    # Based on: https://blender.stackexchange.com/a/290717
-    id_type_substitutes = {
-        'VECTORFONT': 'FONT',
-        # Uncomment if 4.0 or later:
-        # 'GREASEPENCILV3': 'GREASEPENCIL_V3',
-        'LIGHTPROBE': 'LIGHT_PROBE',
-        'FREESTYLELINESTYLE': 'LINESTYLE',
-        'METABALL': 'META',
-        'PARTICLESETTINGS': 'PARTICLE'
-    }
-    def get_id_type(id_data):
-        id_type = id_data.bl_rna.identifier.upper()
-        return id_type_substitutes.get(id_type, id_type)
+    # UnDrew Add Start : Function for getting the id_type of an ID.
+    if not api_compat.HAS_ID_TYPE_PROP:
+        # The ID.id_type property was only added in 4.1, so a substitude is needed in older vers.
+        # This importer can only animate: Object, Key, Camera, Material. Their id_type is just the type in uppercase.
+        # NOTE that this isn't true for all IDs in Blender. E.g. GreasePencilv3 -> 'GREASEPENCIL_V3'
+        def get_id_type(id_data):
+            return id_data.bl_rna.identifier.upper()
+    else:
+        def get_id_type(id_data):
+            return id_data.id_type
     # UnDrew Add End
 
+    shape_key_values = {}
     actions = {}
     for as_uuid, ((fbx_asdata, _blen_data), alayers) in stacks.items():
         stack_name = elem_name_ensure_class(fbx_asdata, b'AnimStack')
@@ -787,7 +1140,7 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
                 if id_data is None:
                     continue
 
-                # Create new action if needed (should always be needed, except for keyblocks from shapekeys cases).
+                # Create new action if needed (should always be needed, except for key-blocks from shape-keys cases).
                 key = (as_uuid, al_uuid, id_data)
                 action = actions.get(key)
                 if action is None:
@@ -797,19 +1150,62 @@ def blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, anim_o
                         action_name = "|".join((id_data.name, stack_name, layer_name))
                     actions[key] = action = bpy.data.actions.new(action_name)
                     action.use_fake_user = True
-                    # UnDrew Add Start : Set the proper id_root on the action, so it isn't possible to irreparably lock an action to the wrong type.
-                    if UE3_set_action_id_root:
+
+                    # COMPAT ADD BEGIN
+                    if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                    # COMPAT ADD END
+                        # Always use the same name for the slot. It should be simple
+                        # to switch between imported Actions while keeping Slot
+                        # auto-assignment, which means that all Actions should use
+                        # the same slot name. As long as there's no separate
+                        # indicator for the "intended object name" for this FBX
+                        # animation, this is the best Blender can do. Maybe the
+                        # 'stack name' would be a better choice?
+                        action.slots.new(id_data.id_type, "Slot")
+
+                    # UnDrew Add Start : When pre-4.4, set the proper id_root on the action, so you can't irreparably
+                    #                    lock it to the wrong type. E.g. Key action to an Object or vice-versa.
+                    #                    Not needed >= 4.4; `ActionSlots.new()` sets `ActionSlot.target_id_type` for us.
+                    if UE3_set_action_id_root and not api_compat.HAS_ANIM_LAYERED_1_STABLE:
                         action.id_root = get_id_type(id_data)
                     # UnDrew Add End
+
                 # If none yet assigned, assign this action to id_data.
                 if not id_data.animation_data:
                     id_data.animation_data_create()
                 if not id_data.animation_data.action:
                     id_data.animation_data.action = action
+                    # COMPAT ADD BEGIN
+                    if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                    # COMPAT ADD END
+                        id_data.animation_data.action_slot = action.slots[0]
+
                 # And actually populate the action!
+                # COMPAT ADD BEGIN
+                if not api_compat.HAS_ANIM_UTILS_ENSURE_CHBAG_FUNC:
+                    chbg_or_act = action
+                else:
+                # COMPAT ADD END
+                    chbg_or_act = anim_utils.action_ensure_channelbag_for_slot(action, action.slots[0])
                 # UnDrew Edit Start : Divide by fps_base to use the *final* fps.
-                blen_read_animations_action_item(action, item, cnodes, (scene.render.fps / scene.render.fps_base) if UE3_custom_fps_fix else scene.render.fps, anim_offset, global_scale)
+                final_fps = (scene.render.fps / scene.render.fps_base) if UE3_custom_fps_fix else scene.render.fps
+                blen_read_animations_action_item(chbg_or_act, item, cnodes, final_fps, anim_offset, global_scale,
+                                                 shape_key_values, fbx_ktime)
                 # UnDrew Edit End
+
+    # If the minimum/maximum animated value is outside the slider range of the shape key, attempt to expand the slider
+    # range until the animated range fits and has extra room to be decreased or increased further.
+    # Shape key slider_min and slider_max have hard min/max values, if an imported animation uses a value outside that
+    # range, a warning message will be printed to the console and the slider_min/slider_max values will end up clamped.
+    shape_key_values_in_range = True
+    for shape_key, deform_values in shape_key_values.items():
+        min_animated_deform = min(deform_values)
+        max_animated_deform = max(deform_values)
+        shape_key_values_in_range &= expand_shape_key_range(shape_key, min_animated_deform)
+        shape_key_values_in_range &= expand_shape_key_range(shape_key, max_animated_deform)
+    if not shape_key_values_in_range:
+        print("WARNING: The imported animated Value of a Shape Key is beyond the minimum/maximum allowed and will be"
+              " clamped during playback.")
 
 
 # ----
@@ -820,7 +1216,7 @@ def blen_read_geom_layerinfo(fbx_layer):
         validate_blend_names(elem_find_first_string_as_bytes(fbx_layer, b'Name')),
         elem_find_first_string_as_bytes(fbx_layer, b'MappingInformationType'),
         elem_find_first_string_as_bytes(fbx_layer, b'ReferenceInformationType'),
-        )
+    )
 
 
 def blen_read_geom_validate_blen_data(blen_data, blen_dtype, item_size):
@@ -829,9 +1225,9 @@ def blen_read_geom_validate_blen_data(blen_data, blen_dtype, item_size):
     blen_data_is_collection = isinstance(blen_data, bpy.types.bpy_prop_collection)
     if not blen_data_is_collection:
         if item_size > 1:
-            assert(len(blen_data.shape) == 2)
-            assert(blen_data.shape[1] == item_size)
-        assert(blen_data.dtype == blen_dtype)
+            assert len(blen_data.shape) == 2
+            assert blen_data.shape[1] == item_size
+        assert blen_data.dtype == blen_dtype
     return blen_data_is_collection
 
 
@@ -840,7 +1236,7 @@ def blen_read_geom_parse_fbx_data(fbx_data, stride, item_size):
     item"""
     # Technically stride < item_size could be supported, but there's probably not a use case for it since it would
     # result in a view of the data with self-overlapping memory.
-    assert(stride >= item_size)
+    assert stride >= item_size
     # View the array.array as an np.ndarray.
     fbx_data_np = parray_as_ndarray(fbx_data)
 
@@ -876,7 +1272,7 @@ def blen_read_geom_parse_fbx_data(fbx_data, stride, item_size):
                 from numpy.lib import stride_tricks
 
                 # fbx_data_np should always start off as flat and C-contiguous.
-                assert(fbx_data_np.strides == (fbx_data_np.itemsize,))
+                assert fbx_data_np.strides == (fbx_data_np.itemsize,)
 
                 num_whole_strides = len(fbx_data_np) // stride
                 # Plus the one partial stride that is enough elements for a complete item.
@@ -935,7 +1331,7 @@ def blen_read_geom_xform(fbx_data_np, xform):
         fbx_total_data = fbx_data_np.size
         fbx_data_np = xform(fbx_data_np)
         # The amount of data should not be changed by xform
-        assert(fbx_data_np.size == fbx_total_data)
+        assert fbx_data_np.size == fbx_total_data
         # Ensure fbx_data_np is still item_size elements per row
         if len(fbx_data_np.shape) != 2 or fbx_data_np.shape[1] != item_size:
             fbx_data_np = fbx_data_np.reshape(-1, item_size)
@@ -972,7 +1368,7 @@ def blen_read_geom_array_foreach_set_direct(blen_data, blen_attr, blen_dtype, fb
         # Set blen_attr of blen_data. The buffer must be flat and C-contiguous, which ravel() ensures
         blen_data.foreach_set(blen_attr, buffer.ravel())
     else:
-        assert(blen_data.size % item_size == 0)
+        assert blen_data.size % item_size == 0
         blen_data = blen_data.view()
         blen_data.shape = (-1, item_size)
         blen_data[:len(fbx_data_np)] = fbx_data_np
@@ -1066,14 +1462,19 @@ def blen_read_geom_array_foreach_set_allsame(blen_data, blen_attr, blen_dtype, f
 
 def blen_read_geom_array_foreach_set_looptovert(mesh, blen_data, blen_attr, blen_dtype, fbx_data, stride, item_size,
                                                 descr, xform):
-    """Generic fbx_layer to blen_data foreach setter for polyloop ByVertice layers.
+    """Generic fbx_layer to blen_data foreach setter for face corner ByVertice layers.
     blen_data must be a bpy_prop_collection or 2d np.ndarray whose second axis length is item_size.
     fbx_data must be an array.array"""
-    # The fbx_data is mapped to vertices. To expand fbx_data to polygon loops, get an array of the vertex index of each
-    # polygon loop that will then be used to index fbx_data
-    loop_vertex_indices = np.empty(len(mesh.loops), dtype=np.uintc)
-    mesh.loops.foreach_get("vertex_index", loop_vertex_indices)
-    blen_read_geom_array_foreach_set_indexed(blen_data, blen_attr, blen_dtype, fbx_data, loop_vertex_indices, stride,
+    # The fbx_data is mapped to vertices. To expand fbx_data to face corners, get an array of the vertex index of each
+    # face corner that will then be used to index fbx_data.
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_CORNER_VERT:
+        corner_vertex_indices = np.empty(len(mesh.loops), dtype=np.uintc)
+        mesh.loops.foreach_get("vertex_index", corner_vertex_indices)
+    else:
+    # COMPAT ADD END
+        corner_vertex_indices = MESH_ATTRIBUTE_CORNER_VERT.to_ndarray(mesh.attributes)
+    blen_read_geom_array_foreach_set_indexed(blen_data, blen_attr, blen_dtype, fbx_data, corner_vertex_indices, stride,
                                              item_size, descr, xform)
 
 
@@ -1094,17 +1495,28 @@ def blen_read_geom_array_mapped_vert(
         fbx_layer_mapping, fbx_layer_ref,
         stride, item_size, descr,
         xform=None, quiet=False,
-        ):
+):
     if fbx_layer_mapping == b'ByVertice':
-        if fbx_layer_ref == b'Direct':
-            assert(fbx_layer_index is None)
+        if fbx_layer_ref == b'IndexToDirect':
+            # XXX Looks like we often get no fbx_layer_index in this case, shall not happen but happens...
+            #     We fallback to 'Direct' mapping in this case.
+            # ~ assert fbx_layer_index is not None
+            if fbx_layer_index is None:
+                blen_read_geom_array_foreach_set_direct(blen_data, blen_attr, blen_dtype, fbx_layer_data, stride,
+                                                        item_size, descr, xform)
+            else:
+                blen_read_geom_array_foreach_set_indexed(blen_data, blen_attr, blen_dtype, fbx_layer_data,
+                                                         fbx_layer_index, stride, item_size, descr, xform)
+            return True
+        elif fbx_layer_ref == b'Direct':
+            assert fbx_layer_index is None
             blen_read_geom_array_foreach_set_direct(blen_data, blen_attr, blen_dtype, fbx_layer_data, stride, item_size,
                                                     descr, xform)
             return True
         blen_read_geom_array_error_ref(descr, fbx_layer_ref, quiet)
     elif fbx_layer_mapping == b'AllSame':
         if fbx_layer_ref == b'IndexToDirect':
-            assert(fbx_layer_index is None)
+            assert fbx_layer_index is None
             blen_read_geom_array_foreach_set_allsame(blen_data, blen_attr, blen_dtype, fbx_layer_data, stride,
                                                      item_size, descr, xform)
             return True
@@ -1121,7 +1533,7 @@ def blen_read_geom_array_mapped_edge(
         fbx_layer_mapping, fbx_layer_ref,
         stride, item_size, descr,
         xform=None, quiet=False,
-        ):
+):
     if fbx_layer_mapping == b'ByEdge':
         if fbx_layer_ref == b'Direct':
             blen_read_geom_array_foreach_set_direct(blen_data, blen_attr, blen_dtype, fbx_layer_data, stride, item_size,
@@ -1130,7 +1542,7 @@ def blen_read_geom_array_mapped_edge(
         blen_read_geom_array_error_ref(descr, fbx_layer_ref, quiet)
     elif fbx_layer_mapping == b'AllSame':
         if fbx_layer_ref == b'IndexToDirect':
-            assert(fbx_layer_index is None)
+            assert fbx_layer_index is None
             blen_read_geom_array_foreach_set_allsame(blen_data, blen_attr, blen_dtype, fbx_layer_data, stride,
                                                      item_size, descr, xform)
             return True
@@ -1147,12 +1559,12 @@ def blen_read_geom_array_mapped_polygon(
         fbx_layer_mapping, fbx_layer_ref,
         stride, item_size, descr,
         xform=None, quiet=False,
-        ):
+):
     if fbx_layer_mapping == b'ByPolygon':
         if fbx_layer_ref == b'IndexToDirect':
             # XXX Looks like we often get no fbx_layer_index in this case, shall not happen but happens...
             #     We fallback to 'Direct' mapping in this case.
-            #~ assert(fbx_layer_index is not None)
+            # ~ assert fbx_layer_index is not None
             if fbx_layer_index is None:
                 blen_read_geom_array_foreach_set_direct(blen_data, blen_attr, blen_dtype, fbx_layer_data, stride,
                                                         item_size, descr, xform)
@@ -1167,7 +1579,7 @@ def blen_read_geom_array_mapped_polygon(
         blen_read_geom_array_error_ref(descr, fbx_layer_ref, quiet)
     elif fbx_layer_mapping == b'AllSame':
         if fbx_layer_ref == b'IndexToDirect':
-            assert(fbx_layer_index is None)
+            assert fbx_layer_index is None
             blen_read_geom_array_foreach_set_allsame(blen_data, blen_attr, blen_dtype, fbx_layer_data, stride,
                                                      item_size, descr, xform)
             return True
@@ -1184,12 +1596,12 @@ def blen_read_geom_array_mapped_polyloop(
         fbx_layer_mapping, fbx_layer_ref,
         stride, item_size, descr,
         xform=None, quiet=False,
-        ):
+):
     if fbx_layer_mapping == b'ByPolygonVertex':
         if fbx_layer_ref == b'IndexToDirect':
             # XXX Looks like we often get no fbx_layer_index in this case, shall not happen but happens...
             #     We fallback to 'Direct' mapping in this case.
-            #~ assert(fbx_layer_index is not None)
+            # ~ assert fbx_layer_index is not None
             if fbx_layer_index is None:
                 blen_read_geom_array_foreach_set_direct(blen_data, blen_attr, blen_dtype, fbx_layer_data, stride,
                                                         item_size, descr, xform)
@@ -1204,14 +1616,14 @@ def blen_read_geom_array_mapped_polyloop(
         blen_read_geom_array_error_ref(descr, fbx_layer_ref, quiet)
     elif fbx_layer_mapping == b'ByVertice':
         if fbx_layer_ref == b'Direct':
-            assert(fbx_layer_index is None)
+            assert fbx_layer_index is None
             blen_read_geom_array_foreach_set_looptovert(mesh, blen_data, blen_attr, blen_dtype, fbx_layer_data, stride,
                                                         item_size, descr, xform)
             return True
         blen_read_geom_array_error_ref(descr, fbx_layer_ref, quiet)
     elif fbx_layer_mapping == b'AllSame':
         if fbx_layer_ref == b'IndexToDirect':
-            assert(fbx_layer_index is None)
+            assert fbx_layer_index is None
             blen_read_geom_array_foreach_set_allsame(blen_data, blen_attr, blen_dtype, fbx_layer_data, stride,
                                                      item_size, descr, xform)
             return True
@@ -1236,13 +1648,24 @@ def blen_read_geom_layer_material(fbx_obj, mesh):
     layer_id = b'Materials'
     fbx_layer_data = elem_prop_first(elem_find_first(fbx_layer, layer_id))
 
-    blen_data = mesh.polygons
+    fbx_item_size = 1
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_MATERIAL_INDEX:
+        blen_data = mesh.polygons
+        blen_attr = "material_index"
+        blen_dtype = np.uintc
+    else:
+    # COMPAT ADD END
+        blen_data = MESH_ATTRIBUTE_MATERIAL_INDEX.ensure(mesh.attributes).data
+        blen_attr = MESH_ATTRIBUTE_MATERIAL_INDEX.foreach_attribute
+        blen_dtype = MESH_ATTRIBUTE_MATERIAL_INDEX.dtype
+        assert fbx_item_size == MESH_ATTRIBUTE_MATERIAL_INDEX.item_size
     blen_read_geom_array_mapped_polygon(
-        mesh, blen_data, "material_index", np.uintc,
+        mesh, blen_data, blen_attr, blen_dtype,
         fbx_layer_data, None,
         fbx_layer_mapping, fbx_layer_ref,
-        1, 1, layer_id,
-        )
+        1, fbx_item_size, layer_id,
+    )
 
 
 def blen_read_geom_layer_uv(fbx_obj, mesh):
@@ -1264,7 +1687,14 @@ def blen_read_geom_layer_uv(fbx_obj, mesh):
                       "" % (layer_id, fbx_layer_name, mesh.name))
                 continue
 
-            blen_data = uv_lay.data
+            # COMPAT ADD BEGIN
+            if not api_compat.HAS_UV_LAYER_UV_PROP:
+                blen_data = uv_lay.data
+                blen_attr = "uv"
+            else:
+            # COMPAT ADD END
+                blen_data = uv_lay.uv
+                blen_attr = "vector"
 
             # some valid files omit this data
             if fbx_layer_data is None:
@@ -1272,19 +1702,25 @@ def blen_read_geom_layer_uv(fbx_obj, mesh):
                 continue
 
             blen_read_geom_array_mapped_polyloop(
-                mesh, blen_data, "uv", np.single,
+                mesh, blen_data, blen_attr, np.single,
                 fbx_layer_data, fbx_layer_index,
                 fbx_layer_mapping, fbx_layer_ref,
                 2, 2, layer_id,
-                )
+            )
 
 
 def blen_read_geom_layer_color(fbx_obj, mesh, colors_type):
-    if colors_type == 'NONE':
-        return
-    use_srgb = colors_type == 'SRGB'
-    layer_type = 'BYTE_COLOR' if use_srgb else 'FLOAT_COLOR'
-    color_prop_name = "color_srgb" if use_srgb else "color"
+    # COMPAT ADD BEGIN
+    using_color_attributes_api = api_compat.HAS_MESH_COL_ATTRS_PROP and api_compat.HAS_COL_ATTR_SRGB_PROP
+    if not using_color_attributes_api:
+        color_prop_name = "color"
+    else:
+    # COMPAT ADD END
+        if colors_type == 'NONE':
+            return
+        use_srgb = colors_type == 'SRGB'
+        layer_type = 'BYTE_COLOR' if use_srgb else 'FLOAT_COLOR'
+        color_prop_name = "color_srgb" if use_srgb else "color"
     # almost same as UVs
     for layer_id in (b'LayerElementColor',):
         for fbx_layer in elem_find_iter(fbx_obj, layer_id):
@@ -1297,7 +1733,13 @@ def blen_read_geom_layer_color(fbx_obj, mesh, colors_type):
             fbx_layer_data = elem_prop_first(elem_find_first(fbx_layer, b'Colors'))
             fbx_layer_index = elem_prop_first(elem_find_first(fbx_layer, b'ColorIndex'))
 
-            color_lay = mesh.color_attributes.new(name=fbx_layer_name, type=layer_type, domain='CORNER')
+            # COMPAT ADD BEGIN
+            if not using_color_attributes_api:
+                # Always init our new layers with full white opaque color.
+                color_lay = mesh.vertex_colors.new(name=fbx_layer_name, do_init=False)
+            else:
+            # COMPAT ADD END
+                color_lay = mesh.color_attributes.new(name=fbx_layer_name, type=layer_type, domain='CORNER')
 
             if color_lay is None:
                 print("Failed to add {%r %r} vertex color layer to %r (probably too many of them?)"
@@ -1316,7 +1758,7 @@ def blen_read_geom_layer_color(fbx_obj, mesh, colors_type):
                 fbx_layer_data, fbx_layer_index,
                 fbx_layer_mapping, fbx_layer_ref,
                 4, 4, layer_id,
-                )
+            )
 
 
 def blen_read_geom_layer_smooth(fbx_obj, mesh):
@@ -1344,26 +1786,60 @@ def blen_read_geom_layer_smooth(fbx_obj, mesh):
             print("warning skipping sharp edges data, no valid edges...")
             return False
 
-        blen_data = mesh.edges
+        fbx_item_size = 1
+        # COMPAT ADD BEGIN
+        if not MESH_ATTRIBUTE_MATERIAL_INDEX:
+            blen_data = mesh.edges
+            blen_attr = "use_edge_sharp"
+            blen_dtype = bool
+        else:
+        # COMPAT ADD END
+            blen_data = MESH_ATTRIBUTE_SHARP_EDGE.ensure(mesh.attributes).data
+            blen_attr = MESH_ATTRIBUTE_SHARP_EDGE.foreach_attribute
+            blen_dtype = MESH_ATTRIBUTE_SHARP_EDGE.dtype
+            assert fbx_item_size == MESH_ATTRIBUTE_SHARP_EDGE.item_size
         blen_read_geom_array_mapped_edge(
-            mesh, blen_data, "use_edge_sharp", bool,
+            mesh, blen_data, blen_attr, blen_dtype,
             fbx_layer_data, None,
             fbx_layer_mapping, fbx_layer_ref,
-            1, 1, layer_id,
-            xform=np.logical_not,
-            )
-        # We only set sharp edges here, not face smoothing itself...
-        mesh.use_auto_smooth = True
+            1, fbx_item_size, layer_id,
+            xform=np.logical_not,  # in FBX, 0 (False) is sharp, but in Blender True is sharp.
+        )
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            # We only set sharp edges here, not face smoothing itself...
+            mesh.use_auto_smooth = True
+        # COMPAT ADD END
         return False
     elif fbx_layer_mapping == b'ByPolygon':
-        blen_data = mesh.polygons
-        return blen_read_geom_array_mapped_polygon(
-            mesh, blen_data, "use_smooth", bool,
+        fbx_item_size = 1
+        # COMPAT ADD BEGIN
+        if not MESH_ATTRIBUTE_SHARP_FACE:
+            sharp_face = None
+            blen_data = mesh.polygons
+            blen_attr = "use_smooth"
+            blen_dtype = bool
+            xform = lambda s: (s != 0)
+        else:
+        # COMPAT ADD END
+            sharp_face = MESH_ATTRIBUTE_SHARP_FACE.ensure(mesh.attributes)
+            blen_data = sharp_face.data
+            blen_attr = MESH_ATTRIBUTE_SHARP_FACE.foreach_attribute
+            blen_dtype = MESH_ATTRIBUTE_SHARP_FACE.dtype
+            xform = lambda s: (s == 0)
+            assert fbx_item_size == MESH_ATTRIBUTE_SHARP_FACE.item_size
+        sharp_face_set_successfully = blen_read_geom_array_mapped_polygon(
+            mesh, blen_data, blen_attr, blen_dtype,
             fbx_layer_data, None,
             fbx_layer_mapping, fbx_layer_ref,
-            1, 1, layer_id,
-            xform=lambda s: (s != 0),  # smoothgroup bitflags, treat as booleans for now
-            )
+            1, fbx_item_size, layer_id,
+            xform=xform,  # smooth-group bit-flags, treat as booleans for now.
+        )
+        # COMPAT EDIT BEGIN
+        if not sharp_face_set_successfully and sharp_face is not None:
+        # COMPAT EDIT BEGIN
+            mesh.attributes.remove(sharp_face)
+        return sharp_face_set_successfully
     else:
         print("warning layer %r mapping type unsupported: %r" % (fbx_layer.id, fbx_layer_mapping))
         return False
@@ -1397,19 +1873,30 @@ def blen_read_geom_layer_edge_crease(fbx_obj, mesh):
             print("warning skipping edge crease data, no valid edges...")
             return False
 
-        blen_data = mesh.edges
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_EDGE_CREASES_4_0:
+            # NOTE: Skipping the API that briefly existed in 3.4, 3.5 and 3.6 because the original addon never did, and
+            #       I'm not sure how to ensure a layer. Would I HAVE to rely on `MESH_OT_customdata_crease_edge_add()`?
+            #       The old API was still functional then, so stick to that.
+            blen_data = mesh.edges
+            blen_attr = "crease"
+        else:
+        # COMPAT ADD END
+            blen_data = mesh.edge_creases_ensure().data
+            blen_attr = "value"
         return blen_read_geom_array_mapped_edge(
-            mesh, blen_data, "crease", np.single,
+            mesh, blen_data, blen_attr, np.single,
             fbx_layer_data, None,
             fbx_layer_mapping, fbx_layer_ref,
             1, 1, layer_id,
             # Blender squares those values before sending them to OpenSubdiv, when other software don't,
             # so we need to compensate that to get similar results through FBX...
             xform=np.sqrt,
-            )
+        )
     else:
         print("warning layer %r mapping type unsupported: %r" % (fbx_layer.id, fbx_layer_mapping))
         return False
+
 
 def blen_read_geom_layer_normal(fbx_obj, mesh, xform=None):
     fbx_layer = elem_find_first(fbx_obj, b'LayerElementNormal')
@@ -1434,29 +1921,50 @@ def blen_read_geom_layer_normal(fbx_obj, mesh, xform=None):
     bl_norm_dtype = np.single
     item_size = 3
     # try loops, then polygons, then vertices.
-    tries = ((mesh.loops, "Loops", False, blen_read_geom_array_mapped_polyloop),
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+        corner_blen_data = mesh.loops
+        corner_blen_attr = "normal"
+    else:
+    # COMPAT ADD END
+        corner_blen_data = mesh.attributes["temp_custom_normals"].data
+        corner_blen_attr = "vector"
+    tries = ((corner_blen_data, "Loops", False, blen_read_geom_array_mapped_polyloop),
              (mesh.polygons, "Polygons", True, blen_read_geom_array_mapped_polygon),
              (mesh.vertices, "Vertices", True, blen_read_geom_array_mapped_vert))
     for blen_data, blen_data_type, is_fake, func in tries:
         bdata = np.zeros((len(blen_data), item_size), dtype=bl_norm_dtype) if is_fake else blen_data
-        if func(mesh, bdata, "normal", bl_norm_dtype,
+        if func(mesh, bdata, corner_blen_attr, bl_norm_dtype,
                 fbx_layer_data, fbx_layer_index, fbx_layer_mapping, fbx_layer_ref, 3, item_size, layer_id, xform, True):
             if blen_data_type == "Polygons":
                 # To expand to per-loop normals, repeat each per-polygon normal by the number of loops of each polygon.
                 poly_loop_totals = np.empty(len(mesh.polygons), dtype=np.uintc)
                 mesh.polygons.foreach_get("loop_total", poly_loop_totals)
                 loop_normals = np.repeat(bdata, poly_loop_totals, axis=0)
-                mesh.loops.foreach_set("normal", loop_normals.ravel())
+                corner_blen_data.foreach_set(corner_blen_attr, loop_normals.ravel())
             elif blen_data_type == "Vertices":
                 # We have to copy vnors to lnors! Far from elegant, but simple.
-                loop_vertex_indices = np.empty(len(mesh.loops), dtype=np.uintc)
-                mesh.loops.foreach_get("vertex_index", loop_vertex_indices)
-                mesh.loops.foreach_set("normal", bdata[loop_vertex_indices].ravel())
+                # COMPAT ADD BEGIN
+                if not MESH_ATTRIBUTE_CORNER_VERT:
+                    loop_vertex_indices = np.empty(len(mesh.loops), dtype=np.uintc)
+                    mesh.loops.foreach_get("vertex_index", loop_vertex_indices)
+                else:
+                # COMPAT ADD END
+                    loop_vertex_indices = MESH_ATTRIBUTE_CORNER_VERT.to_ndarray(mesh.attributes)
+                corner_blen_data.foreach_set(corner_blen_attr, bdata[loop_vertex_indices].ravel())
             return True
 
     blen_read_geom_array_error_mapping("normal", fbx_layer_mapping)
     blen_read_geom_array_error_ref("normal", fbx_layer_ref)
     return False
+
+
+# COMPAT ADD BEGIN
+if not api_compat.HAS_CPP_NORMAL_NORMALIZATION:
+    def normalize_vecs(vectors):
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        np.divide(vectors, norms, out=vectors, where=norms != 0)
+# COMPAT ADD END
 
 
 def blen_read_geom(fbx_tmpl, fbx_obj, settings):
@@ -1477,7 +1985,12 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
     fbx_polys = elem_prop_first(elem_find_first(fbx_obj, b'PolygonVertexIndex'))
     fbx_edges = elem_prop_first(elem_find_first(fbx_obj, b'Edges'))
 
-    bl_vcos_dtype = np.single
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_POSITION:
+        bl_vcos_dtype = np.single
+    else:
+    # COMPAT ADD END
+        bl_vcos_dtype = MESH_ATTRIBUTE_POSITION.dtype
 
     # The dtypes when empty don't matter, but are set to what the fbx arrays are expected to be.
     fbx_verts = parray_as_ndarray(fbx_verts) if fbx_verts else np.empty(0, dtype=data_types.ARRAY_FLOAT64)
@@ -1495,6 +2008,9 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
     tot_edges = len(fbx_edges)
 
     mesh = bpy.data.meshes.new(name=elem_name_utf8)
+    # COMPAT EDIT BEGIN : Don't blindly access the attributes collection.
+    attributes = api_compat.HAS_MESH_ATTRIBUTES and mesh.attributes
+    # COMPAT EDIT END
 
     if tot_verts:
         if geom_mat_co is not None:
@@ -1503,10 +2019,21 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
             fbx_verts = fbx_verts.astype(bl_vcos_dtype, copy=False)
 
         mesh.vertices.add(tot_verts)
-        mesh.vertices.foreach_set("co", fbx_verts.ravel())
+        # COMPAT ADD BEGIN
+        if not MESH_ATTRIBUTE_POSITION:
+            mesh.vertices.foreach_set("co", fbx_verts.ravel())
+        else:
+        # COMPAT ADD END
+            MESH_ATTRIBUTE_POSITION.foreach_set(attributes, fbx_verts.ravel())
 
     if tot_loops:
-        bl_loop_start_dtype = bl_loop_vertex_index_dtype = np.uintc
+        bl_loop_start_dtype = np.uintc
+        # COMPAT ADD BEGIN
+        if not MESH_ATTRIBUTE_CORNER_VERT:
+            bl_loop_vertex_index_dtype = np.uintc
+        else:
+        # COMPAT ADD END
+            bl_loop_vertex_index_dtype = MESH_ATTRIBUTE_CORNER_VERT.dtype
 
         mesh.loops.add(tot_loops)
         # The end of each polygon is specified by an inverted index.
@@ -1517,7 +2044,13 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
         # Un-invert the loop ends.
         fbx_polys[fbx_loop_end_idx] ^= -1
         # Set loop vertex indices, casting to the Blender C type first for performance.
-        mesh.loops.foreach_set("vertex_index", astype_view_signedness(fbx_polys, bl_loop_vertex_index_dtype))
+        val = astype_view_signedness(fbx_polys, bl_loop_vertex_index_dtype)
+        # COMPAT ADD BEGIN
+        if not MESH_ATTRIBUTE_CORNER_VERT:
+            mesh.loops.foreach_set("vertex_index", val)
+        else:
+        # COMPAT ADD END
+            MESH_ATTRIBUTE_CORNER_VERT.foreach_set(attributes, val)
 
         poly_loop_starts = np.empty(tot_polys, dtype=bl_loop_start_dtype)
         # The first loop is always a loop start.
@@ -1527,6 +2060,17 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
 
         mesh.polygons.add(tot_polys)
         mesh.polygons.foreach_set("loop_start", poly_loop_starts)
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_POLYS_FOR_CONSISTENT_ORDER_WITH_LOOPS:
+            # 3.6 automatically infers 'loop_total' from the next poly's 'loop_start'. This isn't true for < 3.5, so in
+            # that case, it has to be done manually. For e.g.:
+            #   Let  poly_loop_starts = [0, a, b, c, d], where a < b < c < d < tot_loops
+            #   Then poly_loop_totals = [a, b-a, c-b, tot_loops-c]
+            poly_loop_totals = np.roll(poly_loop_starts, -1)
+            poly_loop_totals[-1] = tot_loops
+            poly_loop_totals[1:] -= poly_loop_starts[1:]
+            mesh.polygons.foreach_set("loop_total", poly_loop_totals)
+        # COMPAT ADD END
 
         blen_read_geom_layer_material(fbx_obj, mesh)
         blen_read_geom_layer_uv(fbx_obj, mesh)
@@ -1534,7 +2078,12 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
 
         if tot_edges:
             # edges in fact index the polygons (NOT the vertices)
-            bl_edge_vertex_indices_dtype = np.uintc
+            # COMPAT ADD BEGIN
+            if not MESH_ATTRIBUTE_EDGE_VERTS:
+                bl_edge_vertex_indices_dtype = np.uintc
+            else:
+            # COMPAT ADD END
+                bl_edge_vertex_indices_dtype = MESH_ATTRIBUTE_EDGE_VERTS.dtype
 
             # The first vertex index of each edge is the vertex index of the corresponding loop in fbx_polys.
             edges_a = fbx_polys[fbx_edges]
@@ -1557,26 +2106,50 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
             # followed by the second vertex index of that same edge.
             # Stack edges_a and edges_b as individual columns like np.column_stack((edges_a, edges_b)).
             # np.concatenate is used because np.column_stack doesn't allow specifying the dtype of the returned array.
-            edges_conv = np.concatenate((edges_a.reshape(-1, 1), edges_b.reshape(-1, 1)),
-                                        axis=1, dtype=bl_edge_vertex_indices_dtype, casting='unsafe')
+            arrays_to_concat = (edges_a.reshape(-1, 1), edges_b.reshape(-1, 1))
+            # COMPAT ADD BEGIN
+            if not api_compat.HAS_NUMPY_CONCATENATE_DTYPE_PARAM:
+                edges_conv = np.concatenate(arrays_to_concat, axis=1)
+                edges_conv = astype_view_signedness(edges_conv, bl_edge_vertex_indices_dtype)
+            else:
+            # COMPAT ADD END
+                edges_conv = np.concatenate(arrays_to_concat,
+                                            axis=1, dtype=bl_edge_vertex_indices_dtype, casting='unsafe')
 
             # Add the edges and set their vertex indices.
             mesh.edges.add(len(edges_conv))
             # ravel() because edges_conv must be flat and C-contiguous when passed to foreach_set.
-            mesh.edges.foreach_set("vertices", edges_conv.ravel())
+            # COMPAT ADD BEGIN
+            if not MESH_ATTRIBUTE_EDGE_VERTS:
+                mesh.edges.foreach_set("vertices", edges_conv.ravel())
+            else:
+            # COMPAT ADD END
+                MESH_ATTRIBUTE_EDGE_VERTS.foreach_set(attributes, edges_conv.ravel())
     elif tot_edges:
         print("ERROR: No polygons, but edges exist. Ignoring the edges!")
 
     # must be after edge, face loading.
-    ok_smooth = blen_read_geom_layer_smooth(fbx_obj, mesh)
+    face_smoothing_was_set = blen_read_geom_layer_smooth(fbx_obj, mesh)
+    # COMPAT ADD BEGIN
+    if not face_smoothing_was_set and not MESH_ATTRIBUTE_SHARP_FACE:
+        # Before the 'sharp_face' attrib existed, `use_smooth = False` by default, so it has to be set here explicitly.
+        # NOTE: Weirdly, they *still* say that in the modern docs, even though that's not the case anymore.
+        mesh.polygons.foreach_set("use_smooth", np.full(len(mesh.polygons), True, dtype=bool))
+        face_smoothing_was_set = True
+    # COMPAT ADD END
 
-    blen_read_geom_layer_edge_crease(fbx_obj, mesh)
+    ok_crease = blen_read_geom_layer_edge_crease(fbx_obj, mesh)
 
     ok_normals = False
     if settings.use_custom_normals:
         # Note: we store 'temp' normals in loops, since validate() may alter final mesh,
         #       we can only set custom lnors *after* calling it.
-        mesh.create_normals_split()
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            mesh.create_normals_split()
+        else:
+        # COMPAT ADD END
+            mesh.attributes.new("temp_custom_normals", 'FLOAT_VECTOR', 'CORNER')
         if geom_mat_no is None:
             ok_normals = blen_read_geom_layer_normal(fbx_obj, mesh)
         else:
@@ -1588,24 +2161,59 @@ def blen_read_geom(fbx_tmpl, fbx_obj, settings):
     if ok_normals:
         bl_nors_dtype = np.single
         clnors = np.empty(len(mesh.loops) * 3, dtype=bl_nors_dtype)
-        mesh.loops.foreach_get("normal", clnors)
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            mesh.loops.foreach_get("normal", clnors)
+        else:
+        # COMPAT ADD END
+            mesh.attributes["temp_custom_normals"].data.foreach_get("vector", clnors)
 
-        if not ok_smooth:
-            mesh.polygons.foreach_set("use_smooth", np.full(len(mesh.polygons), True, dtype=bool))
-            ok_smooth = True
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_CPP_NORMAL_NORMALIZATION:
+            clnors = clnors.reshape(len(mesh.loops), 3)
+            normalize_vecs(clnors)
+            clnors = clnors.reshape(len(mesh.loops) * 3)
+        # COMPAT ADD END
 
         # Iterating clnors into a nested tuple first is faster than passing clnors.reshape(-1, 3) directly into
         # normals_split_custom_set. We use clnors.data since it is a memoryview, which is faster to iterate than clnors.
         mesh.normals_split_custom_set(tuple(zip(*(iter(clnors.data),) * 3)))
-        mesh.use_auto_smooth = True
-    else:
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            # NOTE: Probably not necessary, but nice to have if the user then chooses to remove custom normals.
+            mesh.use_auto_smooth = True
+            # NOTE: This wasn't part of the original addon, but considering there's no such thing as a smoothing angle
+            #       in FBX, then the feature probably shouldn't be active when imported in Blender. Though, it isn't
+            #       possible to have sharp edges
+            mesh.auto_smooth_angle = 180
+        # COMPAT ADD END
+    # COMPAT ADD BEGIN
+    elif not api_compat.HAS_REMOVED_MESH_CALC_NORMALS_FUNC:
         mesh.calc_normals()
+    # COMPAT ADD END
 
     if settings.use_custom_normals:
-        mesh.free_normals_split()
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            mesh.free_normals_split()
+        else:
+        # COMPAT ADD END
+            mesh.attributes.remove(mesh.attributes["temp_custom_normals"])
 
-    if not ok_smooth:
-        mesh.polygons.foreach_set("use_smooth", np.full(len(mesh.polygons), True, dtype=bool))
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_REFACTORED_EDGE_CREASES_3_4 and ok_crease:
+    # COMPAT ADD END
+        mesh.use_customdata_edge_crease = True
+
+    # COMPAT ADD BEGIN : In vers < 4.1, having sharp edges required having auto-smoothing on, so it had to enable it.
+    #                    But due to what seems like an oversight, the angle was kept at the default 30, which in many
+    #                    cases used to make more visually sharp edges than it was supposed to.
+    #                    In vers >= 4.1, auto-smoothing (now a modifier) is no longer necessary for sharp edges, which
+    #                    implicitly fixes this issue.
+    #                    So, in older vers, set the angle to 180 to get the same behaviour.
+    if not api_compat.HAS_REFACTORED_MESH_SMOOTHING and mesh.use_auto_smooth:
+        mesh.auto_smooth_angle = 180
+    # COMPAT ADD END
 
     if settings.use_custom_props:
         blen_read_custom_properties(fbx_obj, mesh, settings)
@@ -1618,16 +2226,28 @@ def blen_read_shapes(fbx_tmpl, fbx_data, objects, me, scene):
         # No shape key data. Nothing to do.
         return
 
-    bl_vcos_dtype = np.single
-    me_vcos = np.empty(len(me.vertices) * 3, dtype=bl_vcos_dtype)
-    me.vertices.foreach_get("co", me_vcos)
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_POSITION:
+        bl_vcos_dtype = np.single
+        me_vcos = np.empty(len(me.vertices) * 3, dtype=bl_vcos_dtype)
+        me.vertices.foreach_get("co", me_vcos)
+    else:
+    # COMPAT ADD END
+        me_vcos = MESH_ATTRIBUTE_POSITION.to_ndarray(me.attributes)
     me_vcos_vector_view = me_vcos.reshape(-1, 3)
 
     objects = list({node.bl_obj for node in objects})
-    assert(objects)
+    assert objects
 
+    # Blender has a hard minimum and maximum shape key Value. If an imported shape key has a value outside this range it
+    # will be clamped, and we'll print a warning message to the console.
+    shape_key_values_in_range = True
     bc_uuid_to_keyblocks = {}
-    for bc_uuid, fbx_sdata, fbx_bcdata in fbx_data:
+    for bc_uuid, fbx_sdata, fbx_bcdata, shapes_assigned_to_channel in fbx_data:
+        num_shapes_assigned_to_channel = len(shapes_assigned_to_channel)
+        if num_shapes_assigned_to_channel > 1:
+            # Relevant design task: #104698
+            raise RuntimeError("FBX in-between Shapes are not currently supported")  # See bug report #84111
         elem_name_utf8 = elem_name_ensure_class(fbx_sdata, b'Geometry')
         indices = elem_prop_first(elem_find_first(fbx_sdata, b'Indexes'))
         dvcos = elem_prop_first(elem_find_first(fbx_sdata, b'Vertices'))
@@ -1642,39 +2262,69 @@ def blen_read_shapes(fbx_tmpl, fbx_data, objects, me, scene):
             dvcos = dvcos[:-remainder]
         dvcos = dvcos.reshape(-1, 3)
 
+        # There must be the same number of indices as vertex coordinate differences.
+        assert len(indices) == len(dvcos)
+
         # We completely ignore normals here!
         weight = elem_prop_first(elem_find_first(fbx_bcdata, b'DeformPercent'), default=100.0) / 100.0
 
-        vgweights = elem_prop_first(elem_find_first(fbx_bcdata, b'FullWeights'))
-        vgweights = parray_as_ndarray(vgweights) if vgweights else np.empty(0, dtype=data_types.ARRAY_FLOAT64)
-        # Not doing the division in-place in-case it's possible for FBX shape keys to be used by more than one mesh.
-        vgweights = vgweights / 100.0
+        # The FullWeights array stores the deformation percentages of the BlendShapeChannel that fully activate each
+        # Shape assigned to the BlendShapeChannel. Blender also uses this array to store Vertex Group weights, but this
+        # is not part of the FBX standard.
+        full_weights = elem_prop_first(elem_find_first(fbx_bcdata, b'FullWeights'))
+        full_weights = parray_as_ndarray(full_weights) if full_weights else np.empty(0, dtype=data_types.ARRAY_FLOAT64)
 
-        create_vg = (vgweights != 1.0).any()
-
-        # Special case, in case all weights are the same, FullWeight can have only one element - *sigh!*
-        nbr_indices = len(indices)
-        if len(vgweights) == 1 and nbr_indices > 1:
-            vgweights = np.full_like(indices, vgweights[0], dtype=vgweights.dtype)
-
-        assert(len(vgweights) == nbr_indices == len(dvcos))
+        # Special case for Blender exported Shape Keys with a Vertex Group assigned. The Vertex Group weights are stored
+        # in the FullWeights array.
+        # XXX - It's possible, though very rare, to get a false positive here and create a Vertex Group when we
+        #       shouldn't. This should only be possible when there are extraneous FullWeights or when there is a single
+        #       FullWeight and its value is not 100.0.
+        if (
+                # Blender exported Shape Keys only ever export as 1 Shape per BlendShapeChannel.
+                num_shapes_assigned_to_channel == 1
+                # There should be one vertex weight for each vertex moved by the Shape.
+                and len(full_weights) == len(indices)
+                # Skip creating a Vertex Group when all the weights are 100.0 because such a Vertex Group has no effect.
+                # This also avoids creating a Vertex Group for imported Shapes that only move a single vertex because
+                # their BlendShapeChannel's singular FullWeight is expected to always be 100.0.
+                and not np.all(full_weights == 100.0)
+                # Blender vertex weights are always within the [0.0, 1.0] range (scaled to [0.0, 100.0] when saving to
+                # FBX). This can eliminate imported BlendShapeChannels from Unreal that have extraneous FullWeights
+                # because the extraneous values are usually negative.
+                and np.all((full_weights >= 0.0) & (full_weights <= 100.0))
+        ):
+            # Not doing the division in-place because it's technically possible for FBX BlendShapeChannels to be used by
+            # more than one FBX BlendShape, though this shouldn't be the case for Blender exported Shape Keys.
+            vgweights = full_weights / 100.0
+        else:
+            vgweights = None
+            # There must be a FullWeight for each Shape. Any extra FullWeights are ignored.
+            assert len(full_weights) >= num_shapes_assigned_to_channel
 
         # To add shape keys to the mesh, an Object using the mesh is needed.
         if me.shape_keys is None:
             objects[0].shape_key_add(name="Basis", from_mix=False)
         kb = objects[0].shape_key_add(name=elem_name_utf8, from_mix=False)
+        kb.value = 0.0
         me.shape_keys.use_relative = True  # Should already be set as such.
 
         # Only need to set the shape key co if there are any non-zero dvcos.
         if dvcos.any():
             shape_cos = me_vcos_vector_view.copy()
             shape_cos[indices] += dvcos
-            kb.data.foreach_set("co", shape_cos.ravel())
+            # COMPAT ADD BEGIN
+            if not api_compat.HAS_SHAPEKEY_POINTS_PROP:
+                kb.data.foreach_set("co", shape_cos.ravel())
+            else:
+            # COMPAT ADD END
+                kb.points.foreach_set("co", shape_cos.ravel())
+
+        shape_key_values_in_range &= expand_shape_key_range(kb, weight)
 
         kb.value = weight
 
         # Add vgroup if necessary.
-        if create_vg:
+        if vgweights is not None:
             # VertexGroup.add only allows sequences of int indices, but iterating the indices array directly would
             # produce numpy scalars of types such as np.int32. The underlying memoryview of the indices array, however,
             # does produce standard Python ints when iterated, so pass indices.data to add_vgroup_to_objects instead of
@@ -1684,6 +2334,11 @@ def blen_read_shapes(fbx_tmpl, fbx_data, objects, me, scene):
             kb.vertex_group = kb.name
 
         bc_uuid_to_keyblocks.setdefault(bc_uuid, []).append(kb)
+
+    if not shape_key_values_in_range:
+        print("WARNING: The imported Value of a Shape Key on the Mesh '%s' is beyond the minimum/maximum allowed and"
+              " has been clamped." % me.name)
+
     return bc_uuid_to_keyblocks
 
 
@@ -1696,6 +2351,13 @@ def blen_read_material(fbx_tmpl, fbx_obj, settings):
 
     elem_name_utf8 = elem_name_ensure_class(fbx_obj, b'Material')
 
+    if settings.mtl_name_collision_mode == "REFERENCE_EXISTING":
+        # COMPAT EDIT BEGIN : Removed use of the := ("walrus") operator (see: fbx_api_compat.HAS_PY_WALRUS).
+        ma = bpy.data.materials.get(elem_name_utf8)
+        if ma:
+        # COMPAT EDIT END
+            return ma
+
     nodal_material_wrap_map = settings.nodal_material_wrap_map
     ma = bpy.data.materials.new(name=elem_name_utf8)
 
@@ -1706,7 +2368,7 @@ def blen_read_material(fbx_tmpl, fbx_obj, settings):
                  elem_find_first(fbx_tmpl, b'Properties70', fbx_elem_nil))
     fbx_props_no_template = (fbx_props[0], fbx_elem_nil)
 
-    ma_wrap = node_shader_utils.PrincipledBSDFWrapper(ma, is_readonly=False, use_nodes=True)
+    ma_wrap = node_shader_utils.PrincipledBSDFWrapper(ma, is_readonly=False)
     ma_wrap.base_color = elem_props_get_color_rgb(fbx_props, b'DiffuseColor', const_color_white)
     # No specular color in Principled BSDF shader, assumed to be either white or take some tint from diffuse one...
     # TODO: add way to handle tint option (guesstimate from spec color + intensity...)?
@@ -1737,8 +2399,16 @@ def blen_read_material(fbx_tmpl, fbx_obj, settings):
     # elem_props_get_color_rgb(fbx_props, b'ReflectionColor', const_color_white)
     ma_wrap.normalmap_strength = elem_props_get_number(fbx_props, b'BumpFactor', 1.0)
     # Emission strength and color
-    ma_wrap.emission_strength = elem_props_get_number(fbx_props, b'EmissiveFactor', 1.0)
-    ma_wrap.emission_color = elem_props_get_color_rgb(fbx_props, b'EmissiveColor', const_color_black)
+    emission_factor = elem_props_get_number(fbx_props, b'EmissiveFactor', 1.0)
+    emission_color = elem_props_get_color_rgb(fbx_props, b'EmissiveColor', const_color_black)
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_BSDF_EMISSION_STRENGTH:
+        # For emission color we can take into account the factor, but only for default values, not in case of texture.
+        emission_color = [emission_factor * c for c in emission_color]
+    else:
+    # COMPAT ADD END
+        ma_wrap.emission_strength = emission_factor
+    ma_wrap.emission_color = emission_color
 
     nodal_material_wrap_map[ma] = ma_wrap
 
@@ -1784,7 +2454,7 @@ def blen_read_texture_image(fbx_tmpl, fbx_obj, basedir, settings):
         print("Error, could not find any file path in ", fbx_obj)
         print("       Falling back to: ", elem_name_utf8)
         filepath = elem_name_utf8
-    else :
+    else:
         filepath = filepath.replace('\\', '/') if (os.sep == '/') else filepath.replace('/', '\\')
 
     image = image_cache.get(filepath)
@@ -1799,7 +2469,7 @@ def blen_read_texture_image(fbx_tmpl, fbx_obj, basedir, settings):
         dirname=basedir,
         place_holder=True,
         recursive=settings.use_image_search,
-        )
+    )
 
     # Try to use embedded data, if available!
     pack_data_from_content(image, fbx_obj)
@@ -1829,7 +2499,7 @@ def blen_read_camera(fbx_tmpl, fbx_obj, settings):
 
     camera.type = 'ORTHO' if elem_props_get_enum(fbx_props, b'CameraProjectionType', 0) == 1 else 'PERSP'
 
-    camera.dof.focus_distance = elem_props_get_number(fbx_props, b'FocusDistance', 10 * 1000) / 1000 * global_scale
+    camera.dof.focus_distance = elem_props_get_number(fbx_props, b'FocusDistance', 10) * global_scale
     if (elem_props_get_bool(fbx_props, b'UseDepthOfField', False)):
         camera.dof.use_dof = True
 
@@ -1883,12 +2553,15 @@ def blen_read_light(fbx_tmpl, fbx_obj, settings):
     # TODO, cycles nodes???
     lamp.color = elem_props_get_color_rgb(fbx_props, b'Color', (1.0, 1.0, 1.0))
     lamp.energy = elem_props_get_number(fbx_props, b'Intensity', 100.0) / 100.0
-    lamp.distance = elem_props_get_number(fbx_props, b'DecayStart', 25.0) * settings.global_scale
+    # COMPAT ADD BEGIN
+    if api_compat.HAS_LIGHT_EXPOSURE:
+    # COMPAT ADD END
+        lamp.exposure = elem_props_get_number(fbx_props, b'Exposure', 0.0)
     lamp.use_shadow = elem_props_get_bool(fbx_props, b'CastShadow', True)
     if hasattr(lamp, "cycles"):
         lamp.cycles.cast_shadow = lamp.use_shadow
-    # Keeping this for now, but this is not used nor exposed anymore afaik...
-    lamp.shadow_color = elem_props_get_color_rgb(fbx_props, b'ShadowColor', (0.0, 0.0, 0.0))
+    # Removed but could be restored if the value can be applied.
+    # `lamp.shadow_color = elem_props_get_color_rgb(fbx_props, b'ShadowColor', (0.0, 0.0, 0.0))`
 
     if settings.use_custom_props:
         blen_read_custom_properties(fbx_obj, lamp, settings)
@@ -1914,17 +2587,22 @@ class FbxImportHelperNode:
         self.fbx_name = elem_name_ensure_class(fbx_elem, b'Model') if fbx_elem else 'Unknown'
         self.fbx_type = fbx_elem.props[2] if fbx_elem else None
         self.fbx_elem = fbx_elem
-        self.fbx_data_elem = None               # FBX elem of a connected NodeAttribute/Geometry for helpers whose bl_data does not exist or is yet to be created.
+        # FBX elem of a connected NodeAttribute/Geometry for helpers whose bl_data
+        # does not exist or is yet to be created.
+        self.fbx_data_elem = None
         self.bl_obj = None
         self.bl_data = bl_data
-        self.bl_bone = None                     # Name of bone if this is a bone (this may be different to fbx_name if there was a name conflict in Blender!)
+        # Name of bone if this is a bone (this may be different to fbx_name if there was a name conflict in Blender!)
+        self.bl_bone = None
         self.fbx_transform_data = fbx_transform_data
         self.is_root = False
         self.is_bone = is_bone
         self.is_armature = False
         self.armature = None                    # For bones only, relevant armature node.
-        self.has_bone_children = False          # True if the hierarchy below this node contains bones, important to support mixed hierarchies.
-        self.is_leaf = False                    # True for leaf-bones added to the end of some bone chains to set the lengths.
+        # True if the hierarchy below this node contains bones, important to support mixed hierarchies.
+        self.has_bone_children = False
+        # True for leaf-bones added to the end of some bone chains to set the lengths.
+        self.is_leaf = False
         self.pre_matrix = None                  # correction matrix that needs to be applied before the FBX transform
         self.bind_matrix = None                 # for bones this is the matrix used to bind to the skin
         if fbx_transform_data:
@@ -1932,15 +2610,17 @@ class FbxImportHelperNode:
         else:
             self.matrix, self.matrix_as_parent, self.matrix_geom = (None, None, None)
         self.post_matrix = None                 # correction matrix that needs to be applied after the FBX transform
-        self.bone_child_matrix = None           # Objects attached to a bone end not the beginning, this matrix corrects for that
+        # Objects attached to a bone end not the beginning, this matrix corrects for that.
+        self.bone_child_matrix = None
 
         # XXX Those two are to handle the fact that rigged meshes are not linked to their armature in FBX, which implies
-        #     that their animation is in global space (afaik...).
+        #     that their animation is in global space (AFAIK...).
         #     This is actually not really solvable currently, since anim_compensation_matrix is not valid if armature
         #     itself is animated (we'd have to recompute global-to-local anim_compensation_matrix for each frame,
         #     and for each armature action... beyond being an insane work).
         #     Solution for now: do not read rigged meshes animations at all! sic...
-        self.anim_compensation_matrix = None    # a mesh moved in the hierarchy may have a different local matrix. This compensates animations for this.
+        # a mesh moved in the hierarchy may have a different local matrix. This compensates animations for this.
+        self.anim_compensation_matrix = None
         self.is_global_animation = False
 
         self.meshes = None                      # List of meshes influenced by this bone.
@@ -2348,23 +3028,25 @@ class FbxImportHelperNode:
 
         bone.matrix = bone_matrix
 
-        # Correction for children attached to a bone. FBX expects to attach to the head of a bone,
-        # while Blender attaches to the tail.
-        self.bone_child_matrix = Matrix.Translation(-bone_tail)
-
         # UnDrew Add Start : Set the proper inherit_scale value based on FBX's InheritType.
-        # TODO: This is not accurate when there's different InheritTypes in the same skeleton. Oh well!
+        # TODO: This is not accurate when there's alternating InheritTypes in the same skeleton.
+        #       See `fbx_utils.ObjectWrapper.get_inherit_type()`
         if settings.UE3_import_scale_inheritance:
-            bone.inherit_scale = {
+            inherit_scale = {
                 0: 'ALIGNED',   # 0 = RrSs
                 1: 'FULL',      # 1 = RSrs
                 2: 'NONE'       # 2 = Rrs
             }.get(self.fbx_transform_data.inherit_type, 'FULL')
+            if not api_compat.HAS_BONE_ALIGNED_INHERIT_SCALE and inherit_scale == 'ALIGNED':
+                # TODO: Maybe this could instead use 'NONE' and edit keyframes? A lot of work for just 1 ver though.
+                inherit_scale = 'FULL'
+            bone.inherit_scale = inherit_scale
         else:
             bone.inherit_scale = 'FULL'
         # UnDrew Add End
 
         force_connect_children = settings.force_connect_children
+
         connect_ctx = [force_connect_children, ...]
         for child in self.children:
             if child.is_leaf and force_connect_children:
@@ -2378,6 +3060,22 @@ class FbxImportHelperNode:
                 child_connect(bone, child_bone, None, connect_ctx)
 
         child_connect_finalize(bone, connect_ctx)
+
+        # Correction for children attached to a bone. FBX expects to attach to the head of a bone, while Blender
+        # attaches to the tail.
+        if force_connect_children:
+            # When forcefully connecting, the bone's tail position may be changed, which can change both the bone's
+            # rotation and its length.
+            # Set the correction matrix such that it transforms the current tail transformation back to the original
+            # head transformation.
+            head_to_origin = bone.matrix.inverted_safe()
+            tail_to_head = Matrix.Translation(bone.head - bone.tail)
+            origin_to_original_head = bone_matrix
+            tail_to_original_head = head_to_origin @ tail_to_head @ origin_to_original_head
+            self.bone_child_matrix = tail_to_original_head
+        else:
+            self.bone_child_matrix = Matrix.Translation(-bone_tail)
+
         return bone
 
     def build_node_obj(self, fbx_tmpl, settings):
@@ -2500,7 +3198,7 @@ class FbxImportHelperNode:
 
     def set_bone_weights(self):
         ignored_children = tuple(child for child in self.children
-                                       if child.is_bone and child.ignore and len(child.clusters) > 0)
+                                 if child.is_bone and child.ignore and len(child.clusters) > 0)
 
         if len(ignored_children) > 0:
             # If we have an ignored child bone we need to merge their weights into the current bone weights.
@@ -2521,7 +3219,9 @@ class FbxImportHelperNode:
                 for i, w in combined_weights.items():
                     indices.append(i)
                     if len(w) > 1:
-                        weights.append(sum(w) / len(w))
+                        # Add ignored child weights to the current bone's weight.
+                        # XXX - Weights that sum to more than 1.0 get clamped to 1.0 when set in the vertex group.
+                        weights.append(sum(w))
                     else:
                         weights.append(w[0])
 
@@ -2563,7 +3263,12 @@ class FbxImportHelperNode:
                              elem_find_first(fbx_tmpl, b'Properties70', fbx_elem_nil))
 
                 if settings.use_custom_props:
+                    # Read Armature Object custom props from the Node
                     blen_read_custom_properties(self.fbx_elem, arm, settings)
+
+                    if self.fbx_data_elem:
+                        # Read Armature Data custom props from the NodeAttribute
+                        blen_read_custom_properties(self.fbx_data_elem, arm_data, settings)
 
             # instance in scene
             view_layer.active_layer_collection.collection.objects.link(arm)
@@ -2712,7 +3417,8 @@ def load(operator, context, filepath="",
          primary_bone_axis='Y',
          secondary_bone_axis='X',
          use_prepost_rot=True,
-         colors_type='SRGB'):
+         colors_type='SRGB',
+         mtl_name_collision_mode="MAKE_UNIQUE"):
 
     global fbx_elem_nil
     fbx_elem_nil = FBXElem('', (), (), ())
@@ -2746,7 +3452,7 @@ def load(operator, context, filepath="",
         is_ascii = False
 
     if is_ascii:
-        operator.report({'ERROR'}, tip_("ASCII FBX files are not supported %r") % filepath)
+        operator.report({'ERROR'}, rpt_("ASCII FBX files are not supported %r") % filepath)
         return {'CANCELLED'}
     del is_ascii
     # End ascii detection.
@@ -2757,11 +3463,11 @@ def load(operator, context, filepath="",
         import traceback
         traceback.print_exc()
 
-        operator.report({'ERROR'}, tip_("Couldn't open file %r (%s)") % (filepath, e))
+        operator.report({'ERROR'}, rpt_("Couldn't open file %r (%s)") % (filepath, e))
         return {'CANCELLED'}
 
     if version < 7100:
-        operator.report({'ERROR'}, tip_("Version %r unsupported, must be %r or later") % (version, 7100))
+        operator.report({'ERROR'}, rpt_("Version %r unsupported, must be %r or later") % (version, 7100))
         return {'CANCELLED'}
 
     print("FBX version: %r" % version)
@@ -2796,7 +3502,7 @@ def load(operator, context, filepath="",
     fbx_settings = elem_find_first(elem_root, b'GlobalSettings')
     fbx_settings_props = elem_find_first(fbx_settings, b'Properties70')
     if fbx_settings is None or fbx_settings_props is None:
-        operator.report({'ERROR'}, tip_("No 'GlobalSettings' found in file %r") % filepath)
+        operator.report({'ERROR'}, rpt_("No 'GlobalSettings' found in file %r") % filepath)
         return {'CANCELLED'}
 
     # FBX default base unit seems to be the centimeter, while raw Blender Unit is equivalent to the meter...
@@ -2831,7 +3537,7 @@ def load(operator, context, filepath="",
                                                      to_up=primary_bone_axis,
                                                      ).to_4x4()
 
-    # Compute framerate settings.
+    # Compute frame-rate settings.
     # UnDrew Edit Start : FPS import rules.
     def import_fps():
         if UE3_fps_import_rule == 'NEVER':
@@ -2864,7 +3570,7 @@ def load(operator, context, filepath="",
         # UnDrew Add Start : New import settings.
         UE3_import_root_as_bone, UE3_import_scale_inheritance, UE3_connect_children,
         # UnDrew Add End
-        use_prepost_rot, colors_type,
+        use_prepost_rot, colors_type, mtl_name_collision_mode,
     )
 
     # #### And now, the "real" data.
@@ -2876,10 +3582,10 @@ def load(operator, context, filepath="",
     fbx_connections = elem_find_first(elem_root, b'Connections')
 
     if fbx_nodes is None:
-        operator.report({'ERROR'}, tip_("No 'Objects' found in file %r") % filepath)
+        operator.report({'ERROR'}, rpt_("No 'Objects' found in file %r") % filepath)
         return {'CANCELLED'}
     if fbx_connections is None:
-        operator.report({'ERROR'}, tip_("No 'Connections' found in file %r") % filepath)
+        operator.report({'ERROR'}, rpt_("No 'Connections' found in file %r") % filepath)
         return {'CANCELLED'}
 
     # ----
@@ -2896,12 +3602,13 @@ def load(operator, context, filepath="",
                 if fbx_def.id == b'ObjectType':
                     for fbx_subdef in fbx_def.elems:
                         if fbx_subdef.id == b'PropertyTemplate':
-                            assert(fbx_def.props_type == b'S')
-                            assert(fbx_subdef.props_type == b'S')
+                            assert fbx_def.props_type == b'S'
+                            assert fbx_subdef.props_type == b'S'
                             # (b'Texture', b'KFbxFileTexture') - eg.
                             key = fbx_def.props[0], fbx_subdef.props[0]
                             fbx_templates[key] = fbx_subdef
-    _(); del _
+    _()
+    del _
 
     def fbx_template_get(key):
         ret = fbx_templates.get(key, fbx_elem_nil)
@@ -2918,10 +3625,11 @@ def load(operator, context, filepath="",
     def _():
         for fbx_obj in fbx_nodes.elems:
             # TODO, investigate what other items after first 3 may be
-            assert(fbx_obj.props_type[:3] == b'LSS')
+            assert fbx_obj.props_type[:3] == b'LSS'
             fbx_uuid = elem_uuid(fbx_obj)
             fbx_table_nodes[fbx_uuid] = [fbx_obj, None]
-    _(); del _
+    _()
+    del _
 
     # ----
     # Load in the data
@@ -2940,7 +3648,8 @@ def load(operator, context, filepath="",
                 c_src, c_dst = fbx_link.props[1:3]
                 fbx_connection_map.setdefault(c_src, []).append((c_dst, fbx_link))
                 fbx_connection_map_reverse.setdefault(c_dst, []).append((c_src, fbx_link))
-    _(); del _
+    _()
+    del _
 
     perfmon.step("FBX import: Meshes...")
 
@@ -2954,9 +3663,10 @@ def load(operator, context, filepath="",
             if fbx_obj.id != b'Geometry':
                 continue
             if fbx_obj.props[-1] == b'Mesh':
-                assert(blen_data is None)
+                assert blen_data is None
                 fbx_item[1] = blen_read_geom(fbx_tmpl, fbx_obj, settings)
-    _(); del _
+    _()
+    del _
 
     perfmon.step("FBX import: Materials & Textures...")
 
@@ -2970,9 +3680,10 @@ def load(operator, context, filepath="",
             fbx_obj, blen_data = fbx_item
             if fbx_obj.id != b'Material':
                 continue
-            assert(blen_data is None)
+            assert blen_data is None
             fbx_item[1] = blen_read_material(fbx_tmpl, fbx_obj, settings)
-    _(); del _
+    _()
+    del _
 
     # ----
     # Load image & textures data
@@ -2993,7 +3704,8 @@ def load(operator, context, filepath="",
             if fbx_obj.id != b'Texture':
                 continue
             fbx_item[1] = blen_read_texture_image(fbx_tmpl_tex, fbx_obj, basedir, settings)
-    _(); del _
+    _()
+    del _
 
     perfmon.step("FBX import: Cameras & Lamps...")
 
@@ -3007,9 +3719,10 @@ def load(operator, context, filepath="",
             if fbx_obj.id != b'NodeAttribute':
                 continue
             if fbx_obj.props[-1] == b'Camera':
-                assert(blen_data is None)
+                assert blen_data is None
                 fbx_item[1] = blen_read_camera(fbx_tmpl, fbx_obj, settings)
-    _(); del _
+    _()
+    del _
 
     # ----
     # Load lamp data
@@ -3021,9 +3734,10 @@ def load(operator, context, filepath="",
             if fbx_obj.id != b'NodeAttribute':
                 continue
             if fbx_obj.props[-1] == b'Light':
-                assert(blen_data is None)
+                assert blen_data is None
                 fbx_item[1] = blen_read_light(fbx_tmpl, fbx_obj, settings)
-    _(); del _
+    _()
+    del _
 
     # ----
     # Connections
@@ -3187,7 +3901,10 @@ def load(operator, context, filepath="",
                     fbx_skin, _ = fbx_table_nodes.get(skin_uuid, (None, None))
                     if fbx_skin is None or fbx_skin.id != b'Deformer' or fbx_skin.props[2] != b'Skin':
                         continue
-                    for mesh_uuid, mesh_link in fbx_connection_map.get(skin_uuid):
+                    skin_connection = fbx_connection_map.get(skin_uuid)
+                    if skin_connection is None:
+                        continue
+                    for mesh_uuid, mesh_link in skin_connection:
                         if mesh_link.props[0] != b'OO':
                             continue
                         fbx_mesh, _ = fbx_table_nodes.get(mesh_uuid, (None, None))
@@ -3225,7 +3942,8 @@ def load(operator, context, filepath="",
         root_helper.link_hierarchy(fbx_tmpl, settings, scene)
 
         # root_helper.print_info(0)
-    _(); del _
+    _()
+    del _
 
     perfmon.step("FBX import: ShapeKeys...")
 
@@ -3235,33 +3953,66 @@ def load(operator, context, filepath="",
     def _():
         fbx_tmpl = fbx_template_get((b'Geometry', b'KFbxShape'))
 
+        # - FBX             | - Blender equivalent
+        # Mesh              | `Mesh`
+        # BlendShape        | `Key`
+        # BlendShapeChannel | `ShapeKey`, but without its `.data`.
+        # Shape             | `ShapeKey.data`, but also includes normals and the values are relative to the base Mesh
+        #                   | instead of being absolute. The data is sparse, so each Shape has an "Indexes" array too.
+        #                   | FBX 2020 introduced 'Modern Style' Shapes that also support tangents, binormals, vertex
+        #                   | colors and UVs, and can be absolute values instead of relative, but 'Modern Style' Shapes
+        #                   | are not currently supported.
+        #
+        # The FBX connections between Shapes and Meshes form multiple many-many relationships:
+        # Mesh >-< BlendShape >-< BlendShapeChannel >-< Shape
+        # In practice, the relationships are almost never many-many and are more typically 1-many or 1-1:
+        #   Mesh --- BlendShape:
+        #     usually 1-1 and the FBX SDK might enforce that each BlendShape is connected to at most one Mesh.
+        #   BlendShape --< BlendShapeChannel:
+        #     usually 1-many.
+        #   BlendShapeChannel --- or uncommonly --< Shape:
+        #     usually 1-1, but 1-many is a documented feature.
+
+        def connections_gen(c_src_uuid, fbx_id, fbx_type):
+            """Helper to reduce duplicate code"""
+            # Rarely, an imported FBX file will have duplicate connections. For Shape Key related connections, FBX
+            # appears to ignore the duplicates, or overwrite the existing duplicates such that the end result is the
+            # same as ignoring them, so keep a set of the seen connections and ignore any duplicates.
+            seen_connections = set()
+            for c_dst_uuid, ctype in fbx_connection_map.get(c_src_uuid, ()):
+                if ctype.props[0] != b'OO':
+                    # 'Object-Object' connections only.
+                    continue
+                fbx_data, bl_data = fbx_table_nodes.get(c_dst_uuid, (None, None))
+                if fbx_data is None or fbx_data.id != fbx_id or fbx_data.props[2] != fbx_type:
+                    # Either `c_dst_uuid` doesn't exist, or it has a different id or type.
+                    continue
+                connection_key = (c_src_uuid, c_dst_uuid)
+                if connection_key in seen_connections:
+                    # The connection is a duplicate, skip it.
+                    continue
+                seen_connections.add(connection_key)
+                yield c_dst_uuid, fbx_data, bl_data
+
+        # XXX - Multiple Shapes can be assigned to a single BlendShapeChannel to create a progressive blend between the
+        #       base mesh and the assigned Shapes, with the percentage at which each Shape is fully blended being stored
+        #       in the BlendShapeChannel's FullWeights array. This is also known as 'in-between shapes'.
+        #       We don't have any support for in-between shapes currently.
+        blend_shape_channel_to_shapes = {}
         mesh_to_shapes = {}
-        for s_uuid, s_item in fbx_table_nodes.items():
-            fbx_sdata, bl_sdata = s_item = fbx_table_nodes.get(s_uuid, (None, None))
+        for s_uuid, (fbx_sdata, _bl_sdata) in fbx_table_nodes.items():
             if fbx_sdata is None or fbx_sdata.id != b'Geometry' or fbx_sdata.props[2] != b'Shape':
                 continue
 
-            # shape -> blendshapechannel -> blendshape -> mesh.
-            for bc_uuid, bc_ctype in fbx_connection_map.get(s_uuid, ()):
-                if bc_ctype.props[0] != b'OO':
-                    continue
-                fbx_bcdata, _bl_bcdata = fbx_table_nodes.get(bc_uuid, (None, None))
-                if fbx_bcdata is None or fbx_bcdata.id != b'Deformer' or fbx_bcdata.props[2] != b'BlendShapeChannel':
-                    continue
-                for bs_uuid, bs_ctype in fbx_connection_map.get(bc_uuid, ()):
-                    if bs_ctype.props[0] != b'OO':
-                        continue
-                    fbx_bsdata, _bl_bsdata = fbx_table_nodes.get(bs_uuid, (None, None))
-                    if fbx_bsdata is None or fbx_bsdata.id != b'Deformer' or fbx_bsdata.props[2] != b'BlendShape':
-                        continue
-                    for m_uuid, m_ctype in fbx_connection_map.get(bs_uuid, ()):
-                        if m_ctype.props[0] != b'OO':
-                            continue
-                        fbx_mdata, bl_mdata = fbx_table_nodes.get(m_uuid, (None, None))
-                        if fbx_mdata is None or fbx_mdata.id != b'Geometry' or fbx_mdata.props[2] != b'Mesh':
-                            continue
+            # shape -> blend-shape-channel -> blend-shape -> mesh.
+            for bc_uuid, fbx_bcdata, _bl_bcdata in connections_gen(s_uuid, b'Deformer', b'BlendShapeChannel'):
+                # Track the Shapes connected to each BlendShapeChannel.
+                shapes_assigned_to_channel = blend_shape_channel_to_shapes.setdefault(bc_uuid, [])
+                shapes_assigned_to_channel.append(s_uuid)
+                for bs_uuid, _fbx_bsdata, _bl_bsdata in connections_gen(bc_uuid, b'Deformer', b'BlendShape'):
+                    for m_uuid, _fbx_mdata, bl_mdata in connections_gen(bs_uuid, b'Geometry', b'Mesh'):
                         # Blenmeshes are assumed already created at that time!
-                        assert(isinstance(bl_mdata, bpy.types.Mesh))
+                        assert isinstance(bl_mdata, bpy.types.Mesh)
                         # Group shapes by mesh so that each mesh only needs to be processed once for all of its shape
                         # keys.
                         if bl_mdata not in mesh_to_shapes:
@@ -3277,15 +4028,20 @@ def load(operator, context, filepath="",
                             mesh_to_shapes[bl_mdata] = (objects, shapes_list)
                         else:
                             shapes_list = mesh_to_shapes[bl_mdata][1]
-                        shapes_list.append((bc_uuid, fbx_sdata, fbx_bcdata))
+                        # Only the number of shapes assigned to each BlendShapeChannel needs to be passed through to
+                        # `blen_read_shapes`, but that number isn't known until all the connections have been
+                        # iterated, so pass the `shapes_assigned_to_channel` list instead.
+                        shapes_list.append((bc_uuid, fbx_sdata, fbx_bcdata, shapes_assigned_to_channel))
                     # BlendShape deformers are only here to connect BlendShapeChannels to meshes, nothing else to do.
 
         # Iterate through each mesh and create its shape keys
         for bl_mdata, (objects, shapes) in mesh_to_shapes.items():
             for bc_uuid, keyblocks in blen_read_shapes(fbx_tmpl, shapes, objects, bl_mdata, scene).items():
-                # keyblocks is a list of tuples (mesh, keyblock) matching that shape/blendshapechannel, for animation.
+                # keyblocks is a list of tuples (mesh, key-block)
+                # matching that shape/blend-shape-channel, for animation.
                 blend_shape_channels.setdefault(bc_uuid, []).extend(keyblocks)
-    _(); del _
+    _()
+    del _
 
     if settings.use_subsurf:
         perfmon.step("FBX import: Subdivision surfaces")
@@ -3313,19 +4069,45 @@ def load(operator, context, filepath="",
                             mod = parent.bl_obj.modifiers.new('subsurf', 'SUBSURF')
                             mod.levels = preview_levels
                             mod.render_levels = render_levels
-                            boundary_rule = elem_prop_first(elem_find_first(fbx_sdata, b'BoundaryRule'), default=1)
-                            if boundary_rule == 1:
-                                mod.boundary_smooth = "PRESERVE_CORNERS"
-                            else:
-                                mod.boundary_smooth = "ALL"
+                            # COMPAT ADD BEGIN
+                            if api_compat.HAS_SUBSURF_BOUNDARY_SMOOTH:
+                            # COMPAT ADD END
+                                boundary_rule = elem_prop_first(elem_find_first(fbx_sdata, b'BoundaryRule'), default=1)
+                                if boundary_rule == 1:
+                                    mod.boundary_smooth = "PRESERVE_CORNERS"
+                                else:
+                                    mod.boundary_smooth = "ALL"
 
-        _(); del _
+        _()
+        del _
 
     if use_anim:
         perfmon.step("FBX import: Animations...")
 
         # Animation!
         def _():
+            # Find the number of "ktimes" per second for this file.
+            # Start with the default for this FBX version.
+            fbx_ktime = FBX_KTIME_V8 if version >= 8000 else FBX_KTIME_V7
+            # Try to find the value of the nested elem_root->'FBXHeaderExtension'->'OtherFlags'->'TCDefinition' element
+            # and look up the "ktimes" per second for its value.
+            # COMPAT EDIT BEGIN : Removed use of the := ("walrus") operator (see: fbx_api_compat.HAS_PY_WALRUS).
+            header = elem_find_first(elem_root, b'FBXHeaderExtension')
+            if header:
+            # COMPAT EDIT END
+                # The header version that added TCDefinition support is 1004.
+                if elem_prop_first(elem_find_first(header, b'FBXHeaderVersion'), default=0) >= 1004:
+                    # COMPAT EDIT BEGIN : Removed use of the := ("walrus") operator (see: fbx_api_compat.HAS_PY_WALRUS).
+                    other_flags = elem_find_first(header, b'OtherFlags')
+                    if other_flags:
+                        timecode_definition = elem_find_first(other_flags, b'TCDefinition')
+                        if timecode_definition:
+                    # COMPAT EDIT END
+                            timecode_definition_value = elem_prop_first(timecode_definition)
+                            # If its value is unknown or missing, default to FBX_KTIME_V8.
+                            fbx_ktime = FBX_TIMECODE_DEFINITION_TO_KTIME_PER_SECOND.get(timecode_definition_value,
+                                                                                        FBX_KTIME_V8)
+
             fbx_tmpl_astack = fbx_template_get((b'AnimationStack', b'FbxAnimStack'))
             fbx_tmpl_alayer = fbx_template_get((b'AnimationLayer', b'FbxAnimLayer'))
             stacks = {}
@@ -3345,7 +4127,7 @@ def load(operator, context, filepath="",
                         continue
                     fbx_asdata, _bl_asdata = fbx_table_nodes.get(as_uuid, (None, None))
                     if (fbx_asdata is None or fbx_asdata.id != b'AnimationStack' or
-                        fbx_asdata.props[2] != b'' or as_uuid not in stacks):
+                            fbx_asdata.props[2] != b'' or as_uuid not in stacks):
                         continue
                     yield as_uuid
             for al_uuid, fbx_alitem in fbx_table_nodes.items():
@@ -3409,9 +4191,9 @@ def load(operator, context, filepath="",
                         continue
                     for as_uuid in get_astacks_from_alayer(al_uuid):
                         _fbx_alitem, anim_items = stacks[as_uuid][1][al_uuid]
-                        assert(_fbx_alitem == fbx_alitem)
+                        assert _fbx_alitem == fbx_alitem
                         for item, item_prop in items:
-                            # No need to keep curvenode FBX data here, contains nothing useful for us.
+                            # No need to keep curve-node FBX data here, contains nothing useful for us.
                             anim_items.setdefault(item, {})[acn_uuid] = (cnode, item_prop)
 
             # AnimationCurves (real animation data).
@@ -3424,7 +4206,7 @@ def load(operator, context, filepath="",
                         continue
                     fbx_acndata, _bl_acndata = fbx_table_nodes.get(acn_uuid, (None, None))
                     if (fbx_acndata is None or fbx_acndata.id != b'AnimationCurveNode' or
-                        fbx_acndata.props[2] != b'' or acn_uuid not in curvenodes):
+                            fbx_acndata.props[2] != b'' or acn_uuid not in curvenodes):
                         continue
                     # Note this is an infamous simplification of the compound props stuff,
                     # seems to be standard naming but we'll probably have to be smarter to handle more exotic files?
@@ -3439,11 +4221,13 @@ def load(operator, context, filepath="",
                     curvenodes[acn_uuid][ac_uuid] = (fbx_acitem, channel)
 
             # And now that we have sorted all this, apply animations!
-            # UnDrew Edit Start : Pass the FPS fix setting.
-            blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, settings.anim_offset, UE3_custom_fps_fix, UE3_set_action_id_root, global_scale)
+            # UnDrew Edit Start : Pass settings.
+            blen_read_animations(fbx_tmpl_astack, fbx_tmpl_alayer, stacks, scene, settings.anim_offset, UE3_custom_fps_fix, UE3_set_action_id_root, global_scale,
+                                 fbx_ktime)
             # UnDrew Edit End
 
-        _(); del _
+        _()
+        del _
 
     perfmon.step("FBX import: Assign materials...")
 
@@ -3509,7 +4293,8 @@ def load(operator, context, filepath="",
         for mesh in processed_meshes:
             if mesh.validate_material_indices():
                 print("WARNING: mesh '%s' had invalid material indices, those were reset to first material" % mesh.name)
-    _(); del _
+    _()
+    del _
 
     perfmon.step("FBX import: Assign textures...")
 
@@ -3520,7 +4305,7 @@ def load(operator, context, filepath="",
         # b'KFbxSurfaceLambert'
 
         def texture_mapping_set(fbx_obj, node_texture):
-            assert(fbx_obj.id == b'Texture')
+            assert fbx_obj.id == b'Texture'
 
             fbx_props = (elem_find_first(fbx_obj, b'Properties70'),
                          elem_find_first(fbx_tmpl, b'Properties70', fbx_elem_nil))
@@ -3534,7 +4319,7 @@ def load(operator, context, filepath="",
             if (loc == (0.0, 0.0, 0.0) and
                 rot == (0.0, 0.0, 0.0) and
                 scale == (1.0, 1.0, 1.0) and
-                clamp == False):
+                    clamp == False):
                 return
 
             node_texture.translation = loc
@@ -3589,7 +4374,9 @@ def load(operator, context, filepath="",
                     elif lnk_type in {b'EmissiveColor'}:
                         ma_wrap.emission_color_texture.image = image
                         texture_mapping_set(fbx_lnk, ma_wrap.emission_color_texture)
-                    elif lnk_type in {b'EmissiveFactor'}:
+                    # COMPAT EDIT BEGIN
+                    elif lnk_type in {b'EmissiveFactor'} and api_compat.HAS_BSDF_EMISSION_STRENGTH:
+                    # COMPAT EDIT END
                         ma_wrap.emission_strength_texture.image = image
                         texture_mapping_set(fbx_lnk, ma_wrap.emission_strength_texture)
                     else:
@@ -3622,7 +4409,8 @@ def load(operator, context, filepath="",
             # ~ ma_wrap = nodal_material_wrap_map[material]
             # ~ ma_wrap.mapping_set_from_diffuse()
 
-    _(); del _
+    _()
+    del _
 
     perfmon.step("FBX import: Cycles z-offset workaround...")
 
@@ -3636,24 +4424,46 @@ def load(operator, context, filepath="",
                 if fbx_obj.props[-1] == b'Mesh':
                     mesh = fbx_item[1]
 
-                    if decal_offset != 0.0:
+                    num_verts = len(mesh.vertices)
+                    if decal_offset != 0.0 and num_verts > 0:
                         for material in mesh.materials:
                             if material in material_decals:
-                                num_verts = len(mesh.vertices)
-                                blen_cos_dtype = blen_norm_dtype = np.single
-                                vcos = np.empty(num_verts * 3, dtype=blen_cos_dtype)
+                                # COMPAT ADD BEGIN
+                                if not MESH_ATTRIBUTE_POSITION:
+                                    blen_cos_dtype = np.single
+                                    vcos = np.empty(num_verts * 3, dtype=blen_cos_dtype)
+                                    mesh.vertices.foreach_get("co", vcos)
+                                else:
+                                # COMPAT ADD END
+                                    vcos = MESH_ATTRIBUTE_POSITION.to_ndarray(mesh.attributes)
+                                blen_norm_dtype = np.single
                                 vnorm = np.empty(num_verts * 3, dtype=blen_norm_dtype)
-                                mesh.vertices.foreach_get("co", vcos)
-                                mesh.vertices.foreach_get("normal", vnorm)
+                                # COMPAT ADD BEGIN
+                                if not HAS_VRTX_AND_PLGN_NORM_ARRAYS:
+                                    mesh.vertices.foreach_get("normal", vnorm)
+                                else:
+                                # COMPAT ADD END
+                                    mesh.vertex_normals.foreach_get("vector", vnorm)
 
                                 vcos += vnorm * decal_offset
 
-                                mesh.vertices.foreach_set("co", vcos)
+                                # COMPAT ADD BEGIN
+                                if not MESH_ATTRIBUTE_POSITION:
+                                    mesh.vertices.foreach_set("co", vcos)
+                                else:
+                                # COMPAT ADD END
+                                    MESH_ATTRIBUTE_POSITION.foreach_set(mesh.attributes, vcos)
                                 break
 
                     for obj in (obj for obj in bpy.data.objects if obj.data == mesh):
-                        obj.visible_shadow = False
-    _(); del _
+                        # COMPAT ADD BEGIN
+                        if not api_compat.HAS_REFACTORED_VISIBLE_FLAGS:
+                            obj.cycles_visibility.shadow = False
+                        else:
+                        # COMPAT ADD END
+                            obj.visible_shadow = False
+    _()
+    del _
 
     perfmon.level_down()
 

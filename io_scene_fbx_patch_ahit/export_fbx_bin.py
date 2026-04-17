@@ -1,8 +1,3 @@
-# SPDX-FileCopyrightText: 2013 Campbell Barton
-# SPDX-FileCopyrightText: 2014 Bastien Montagne
-#
-# SPDX-License-Identifier: GPL-2.0-or-later
-
 import datetime
 import math
 import numpy as np
@@ -10,7 +5,15 @@ import os
 import time
 
 from itertools import zip_longest
-from functools import cache
+# COMPAT ADD BEGIN
+try:
+# COMPAT ADD END
+    from functools import cache
+# COMPAT ADD BEGIN : @cache was only added in Python 3.9, so it may fail importing.
+except ImportError:
+    from functools import lru_cache
+    cache = lru_cache(maxsize=None)
+# COMPAT ADD END
 
 if "bpy" in locals():
     import importlib
@@ -84,6 +87,10 @@ from .fbx_utils import (
     # Top level.
     FBXExportSettingsMedia, FBXExportSettings, FBXExportData,
 )
+
+# COMPAT ADD BEGIN
+from . import fbx_api_compat as api_compat
+# COMPAT ADD END
 
 # UnDrew Add Start : Import Iterable, for removing prefixes from animation names.
 from collections.abc import Iterable
@@ -208,6 +215,7 @@ def fbx_template_def_light(scene, settings, override_defaults=None, nbr_users=0)
         b"CastLight": (True, "p_bool", False),
         b"Color": ((1.0, 1.0, 1.0), "p_color", True),
         b"Intensity": (100.0, "p_number", True),  # Times 100 compared to Blender values...
+        b"Exposure": (0.0, "p_number", True),
         b"DecayType": (2, "p_enum", False),  # Quadratic.
         b"DecayStart": (30.0 * gscale, "p_double", False),
         b"CastShadows": (True, "p_bool", False),
@@ -269,7 +277,7 @@ def fbx_template_def_camera(scene, settings, override_defaults=None, nbr_users=0
         b"ShowAzimut": (True, "p_bool", False),
         b"ShowTimeCode": (False, "p_bool", False),
         b"ShowAudio": (False, "p_bool", False),
-        b"AudioColor": ((0.0, 1.0, 0.0), "p_vector_3d", False),  # Yep, vector3d, not corlorgb… :cry:
+        b"AudioColor": ((0.0, 1.0, 0.0), "p_vector_3d", False),  # Yep, `vector3d`, not `corlorgb` (cry).
         b"NearPlane": (10.0, "p_double", False),
         b"FarPlane": (4000.0, "p_double", False),
         b"AutoComputeClipPanes": (False, "p_bool", False),
@@ -536,6 +544,10 @@ def fbx_data_element_custom_properties(props, bid):
     for k, v in items:
         if k in rna_properties:
             continue
+        # COMPAT ADD BEGIN
+        if k == '_RNA_UI' and not api_compat.HAS_REFACTORED_UI_DATA:
+            continue
+        # COMPAT ADD END
 
         list_val = getattr(v, "to_list", lambda: None)()
 
@@ -591,8 +603,8 @@ def fbx_data_light_elements(root, lamp, scene_data):
 
     light_key = scene_data.data_lights[lamp]
     do_light = True
-    # NOTE: this was removed from lamps, always write black.
     do_shadow = False
+    # NOTE: this was removed from lamps, always write black.
     shadow_color = Vector((0.0, 0.0, 0.0))
     if lamp.type not in {'HEMI'}:
         do_light = True
@@ -605,12 +617,27 @@ def fbx_data_light_elements(root, lamp, scene_data):
 
     elem_data_single_int32(light, b"GeometryVersion", FBX_GEOMETRY_VERSION)  # Sic...
 
+    intensity = lamp.energy * 100.0
+    # COMPAT ADD BEGIN
+    if api_compat.HAS_LIGHT_EXPOSURE:
+    # COMPAT ADD END
+        intensity *= pow(2.0, lamp.exposure)
+    color = lamp.color.copy()
+    # COMPAT ADD BEGIN
+    if api_compat.HAS_LIGHT_TEMPERATURE:
+    # COMPAT ADD END
+        if lamp.use_temperature:
+            temperature_color = lamp.temperature_color
+            color[0] *= temperature_color[0]
+            color[1] *= temperature_color[1]
+            color[2] *= temperature_color[2]
+
     tmpl = elem_props_template_init(scene_data.templates, b"Light")
     props = elem_properties(light)
     elem_props_template_set(tmpl, props, "p_enum", b"LightType", FBX_LIGHT_TYPES[lamp.type])
     elem_props_template_set(tmpl, props, "p_bool", b"CastLight", do_light)
-    elem_props_template_set(tmpl, props, "p_color", b"Color", lamp.color)
-    elem_props_template_set(tmpl, props, "p_number", b"Intensity", lamp.energy * 100.0)
+    elem_props_template_set(tmpl, props, "p_color", b"Color", color)
+    elem_props_template_set(tmpl, props, "p_number", b"Intensity", intensity)
     elem_props_template_set(tmpl, props, "p_enum", b"DecayType", FBX_LIGHT_DECAY_TYPES['INVERSE_SQUARE'])
     elem_props_template_set(tmpl, props, "p_double", b"DecayStart", 25.0 * gscale)  # 25 is old Blender default
     elem_props_template_set(tmpl, props, "p_bool", b"CastShadows", do_shadow)
@@ -778,7 +805,7 @@ def fbx_data_mesh_shapes_elements(root, me_obj, me, scene_data, fbx_me_tmpl, fbx
     channels = []
 
     vertices = me.vertices
-    for shape, (channel_key, geom_key, shape_verts_co, shape_verts_idx) in shapes.items():
+    for shape, (channel_key, geom_key, shape_verts_co, shape_verts_nors, shape_verts_idx) in shapes.items():
         # Use vgroups as weights, if defined.
         if shape.vertex_group and shape.vertex_group in me_obj.bdata.vertex_groups:
             shape_verts_weights = np.zeros(len(shape_verts_idx), dtype=np.float64)
@@ -809,10 +836,19 @@ def fbx_data_mesh_shapes_elements(root, me_obj, me, scene_data, fbx_me_tmpl, fbx
         elem_data_single_int32_array(geom, b"Indexes", shape_verts_idx)
         elem_data_single_float64_array(geom, b"Vertices", shape_verts_co)
         if write_normals:
-            elem_data_single_float64_array(geom, b"Normals", np.zeros(len(shape_verts_idx) * 3, dtype=np.float64))
+            # In some Unity versions (2020-2023), when all normals are 0 for
+            # a particular shape, it'll recalculate instead of importing,
+            # causing really broken normals. This works around it as per
+            # discussion in !126491
+            eps = 1.1e-6
+            requires_unity_workaround = (np.abs(shape_verts_nors) < eps).all()
+            if requires_unity_workaround:
+                shape_verts_nors[0][0] = eps
 
-    # Yiha! BindPose for shapekeys too! Dodecasigh...
-    # XXX Not sure yet whether several bindposes on same mesh are allowed, or not... :/
+            elem_data_single_float64_array(geom, b"Normals", shape_verts_nors)
+
+    # Yiha! BindPose for shape-keys too! Dodecasigh...
+    # XXX Not sure yet whether several bind-poses on same mesh are allowed, or not... :/
     fbx_data_bindpose_element(root, me_obj, me, scene_data)
 
     # ...and now, the deformers stuff.
@@ -880,8 +916,9 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
         fbx_data_element_custom_properties(props, me)
 
     # Subdivision levels. Take them from the first found subsurf modifier from the
-    # first object that has the mesh. Write crease information if the object has
-    # and subsurf modifier.
+    # first object that has the mesh. Always write crease information if present,
+    # if the modifier explicitly uses creases ("use_creases" setting) and mesh lacks them,
+    # still provide zeros (see TODO comment below)
     write_crease = False
     if scene_data.settings.use_subsurf:
         last_subsurf = None
@@ -893,7 +930,9 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
 
         if last_subsurf:
             elem_data_single_int32(geom, b"Smoothness", 2)  # Display control mesh and smoothed
-            if last_subsurf.boundary_smooth == "PRESERVE_CORNERS":
+            # COMPAT EDIT BEGIN
+            if api_compat.HAS_SUBSURF_BOUNDARY_SMOOTH and last_subsurf.boundary_smooth == "PRESERVE_CORNERS":
+            # COMPAT EDIT END
                 elem_data_single_int32(geom, b"BoundaryRule", 1)  # CreaseAll
             else:
                 elem_data_single_int32(geom, b"BoundaryRule", 2)  # CreaseEdge
@@ -905,14 +944,29 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
             elem_data_single_int32(geom, b"PropagateEdgeHardness", 0)
 
             write_crease = last_subsurf.use_creases
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_REFACTORED_EDGE_CREASES_3_4:
+        write_crease = (write_crease or me.use_customdata_edge_crease)
+    else:
+    # COMPAT ADD END
+        write_crease = (write_crease or me.edge_creases)
 
     elem_data_single_int32(geom, b"GeometryVersion", FBX_GEOMETRY_VERSION)
 
-    attributes = me.attributes
+    # COMPAT EDIT BEGIN : Don't blindly access the attributes collection.
+    attributes = api_compat.HAS_MESH_ATTRIBUTES and me.attributes
+    # COMPAT EDIT END
 
     # Vertex cos.
     pos_fbx_dtype = np.float64
-    t_pos = MESH_ATTRIBUTE_POSITION.to_ndarray(attributes)
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_POSITION:
+        co_bl_dtype = np.single
+        t_pos = np.empty(len(me.vertices) * 3, dtype=co_bl_dtype)
+        me.vertices.foreach_get("co", t_pos)
+    else:
+    # COMPAT ADD END
+        t_pos = MESH_ATTRIBUTE_POSITION.to_ndarray(attributes)
     elem_data_single_float64_array(geom, b"Vertices", vcos_transformed(t_pos, geom_mat_co, pos_fbx_dtype))
     del t_pos
 
@@ -927,26 +981,71 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
 
     # dtypes matching the C data. Matching the C datatype avoids iteration and casting of every element in foreach_get's
     # C code.
-    bl_loop_index_dtype = np.uintc
+    bl_vertex_index_dtype = bl_edge_index_dtype = bl_loop_index_dtype = np.uintc
 
     # Start vertex indices of loops (corners). May contain elements for loops added for the export of loose edges.
-    t_lvi = MESH_ATTRIBUTE_CORNER_VERT.to_ndarray(attributes)
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_CORNER_VERT:
+        t_lvi = np.empty(len(me.loops), dtype=bl_vertex_index_dtype)
+        me.loops.foreach_get("vertex_index", t_lvi)
+    else:
+    # COMPAT ADD END
+        t_lvi = MESH_ATTRIBUTE_CORNER_VERT.to_ndarray(attributes)
 
     # Loop start indices of polygons. May contain elements for the polygons added for the export of loose edges.
     t_ls = np.empty(len(me.polygons), dtype=bl_loop_index_dtype)
 
     # Vertex indices of edges (unsorted, unlike Mesh.edge_keys), flattened into an array twice the length of the number
     # of edges.
-    t_ev = MESH_ATTRIBUTE_EDGE_VERTS.to_ndarray(attributes)
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_EDGE_VERTS:
+        t_ev = np.empty(len(me.edges) * 2, dtype=bl_vertex_index_dtype)
+        me.edges.foreach_get("vertices", t_ev)
+    else:
+    # COMPAT ADD END
+        t_ev = MESH_ATTRIBUTE_EDGE_VERTS.to_ndarray(attributes)
     # Each edge has two vertex indices, so it's useful to view the array as 2d where each element on the first axis is a
     # pair of vertex indices
     t_ev_pair_view = t_ev.view()
     t_ev_pair_view.shape = (-1, 2)
 
     # Edge indices of loops (corners). May contain elements for loops added for the export of loose edges.
-    t_lei = MESH_ATTRIBUTE_CORNER_EDGE.to_ndarray(attributes)
+    # COMPAT ADD BEGIN
+    if not MESH_ATTRIBUTE_CORNER_EDGE:
+        t_lei = np.empty(len(me.loops), dtype=bl_edge_index_dtype)
+        me.loops.foreach_get("edge_index", t_lei)
+    else:
+    # COMPAT ADD END
+        t_lei = MESH_ATTRIBUTE_CORNER_EDGE.to_ndarray(attributes)
 
     me.polygons.foreach_get("loop_start", t_ls)
+
+    # COMPAT RESTORE BEGIN : From reverted: https://github.com/blender/blender-addons/commit/4140febae1
+
+    # Polygons might not be in the same order as loops. To export per-loop and per-polygon data in a matching order,
+    # one must be set into the order of the other. Since there are fewer polygons than loops and there are usually
+    # more geometry layers exported that are per-loop than per-polygon, it's more efficient to re-order polygons and
+    # per-polygon data.
+    perm_polygons_to_loop_order = None
+    # t_ls indicates the ordering of polygons compared to loops. When t_ls is sorted, polygons and loops are in the same
+    # order. Since each loop must be assigned to exactly one polygon for the mesh to be valid, every value in t_ls must
+    # be unique, so t_ls will be monotonically increasing when sorted.
+    # t_ls is expected to be in the same order as loops in most cases since exiting Edit mode will sort t_ls, so do an
+    # initial check for any element being smaller than the previous element to determine if sorting is required.
+    # COMPAT ADD BEGIN
+    sort_polygon_data = not api_compat.HAS_REFACTORED_POLYS_FOR_CONSISTENT_ORDER_WITH_LOOPS
+    # COMPAT ADD END
+    sort_polygon_data = sort_polygon_data and np.any(t_ls[1:] < t_ls[:-1])
+    if sort_polygon_data:
+        # t_ls is not sorted, so get the indices that would sort t_ls using argsort, these will be re-used to sort
+        # per-polygon data.
+        # Using 'stable' for radix sort, which performs much better with partially ordered data and slightly worse with
+        # completely random data, compared to the default of 'quicksort' for introsort.
+        perm_polygons_to_loop_order = np.argsort(t_ls, kind='stable')
+        # Sort t_ls into the same order as loops.
+        t_ls = t_ls[perm_polygons_to_loop_order]
+
+    # COMPAT RESTORE END
 
     # Add "fake" faces for loose edges. Each "fake" face consists of two loops creating a new 2-sided polygon.
     if scene_data.settings.use_mesh_edges:
@@ -991,8 +1090,8 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
         # Get unsorted edge keys by indexing the edge->vertex-indices array by the loop->edge-index array.
         t_pvi_edge_keys = t_ev_pair_view[t_lei]
 
-        # Sort each [edge_start_n, edge_end_n] pair to get edge keys. Heapsort seems to be the fastest for this specific
-        # use case.
+        # Sort each [edge_start_n, edge_end_n] pair to get edge keys.
+        # Heap-sort seems to be the fastest for this specific use case.
         t_pvi_edge_keys.sort(axis=1, kind='heapsort')
 
         # Note that finding unique edge keys means that if there are multiple edges that share the same vertices (which
@@ -1007,7 +1106,7 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
         # To get the indices of the elements in t_pvi_edge_keys that produce unique values, but in the original order of
         # t_pvi_edge_keys, t_eli must be sorted.
         # Due to loops and their edge keys tending to have a partial ordering within meshes, sorting with kind='stable'
-        # with radix sort tends to be faster than the default of kind='quicksort' with introsort.
+        # with radix sort tends to be faster than the default of `kind='quicksort'` with `introsort`.
         t_eli.sort(kind='stable')
 
         # Edge index of each element in unique t_pvi_edge_keys, used to map per-edge data such as sharp and creases.
@@ -1040,20 +1139,39 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
     # And now, layers!
 
     # Smoothing.
-    if smooth_type in {'FACE', 'EDGE'}:
+    if smooth_type in {'FACE', 'EDGE', 'SMOOTH_GROUP'}:
         ps_fbx_dtype = np.int32
+        poly_use_smooth_dtype = bool
+        edge_use_sharp_dtype = bool
         _map = b""
         if smooth_type == 'FACE':
             # The FBX integer values are usually interpreted as boolean where 0 is False (sharp) and 1 is True
             # (smooth).
             # The values may also be used to represent smoothing group bitflags, but this does not seem well-supported.
-            t_ps = MESH_ATTRIBUTE_SHARP_FACE.get_ndarray(attributes)
-            if t_ps is not None:
-                # FBX sharp is False, but Blender sharp is True, so invert.
-                t_ps = np.logical_not(t_ps)
+            # COMPAT ADD BEGIN
+            if not MESH_ATTRIBUTE_SHARP_FACE:
+                t_ps = np.empty(len(me.polygons), dtype=poly_use_smooth_dtype)
+                me.polygons.foreach_get("use_smooth", t_ps)
             else:
-                # The mesh has no "sharp_face" attribute, so every face is smooth.
-                t_ps = np.ones(len(me.polygons), dtype=ps_fbx_dtype)
+            # COMPAT ADD END
+                t_ps = MESH_ATTRIBUTE_SHARP_FACE.get_ndarray(attributes)
+                if t_ps is not None:
+                    # FBX sharp is False, but Blender sharp is True, so invert.
+                    t_ps = np.logical_not(t_ps)
+                else:
+                    # The mesh has no "sharp_face" attribute, so every face is smooth.
+                    t_ps = np.ones(len(me.polygons), dtype=ps_fbx_dtype)
+            # COMPAT RESTORE BEGIN : From reverted: https://github.com/blender/blender-addons/commit/4140febae1
+            if t_ps is not None and sort_polygon_data:
+                t_ps = t_ps[perm_polygons_to_loop_order]
+            # COMPAT RESTORE END
+            _map = b"ByPolygon"
+        elif smooth_type == 'SMOOTH_GROUP':
+            # COMPAT ADD BEGIN
+            assert api_compat.HAS_SMOOTH_GROUPS_BOUNDARY_VERTICES_PARAM
+            # COMPAT ADD END
+            smoothing_groups = me.calc_smooth_groups(use_bitflags=True, use_boundary_vertices_for_bitflags=True)[0]
+            t_ps = np.asarray(smoothing_groups, dtype=ps_fbx_dtype)
             _map = b"ByPolygon"
         else:  # EDGE
             _map = b"ByEdge"
@@ -1073,7 +1191,13 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
 
                 # - Get sharp edges from the "sharp_edge" attribute. The attribute may not exist, in which case, there
                 #   are no edges marked as sharp.
-                e_use_sharp_mask = MESH_ATTRIBUTE_SHARP_EDGE.get_ndarray(attributes)
+                # COMPAT ADD BEGIN
+                if not MESH_ATTRIBUTE_SHARP_EDGE:
+                    e_use_sharp_mask = np.empty(mesh_edge_nbr, dtype=edge_use_sharp_dtype)
+                    me.edges.foreach_get('use_edge_sharp', e_use_sharp_mask)
+                else:
+                # COMPAT ADD END
+                    e_use_sharp_mask = MESH_ATTRIBUTE_SHARP_EDGE.get_ndarray(attributes)
                 if e_use_sharp_mask is not None:
                     # - Combine with edges that are sharp because they're in more than two faces
                     e_use_sharp_mask = np.logical_or(e_use_sharp_mask, e_more_than_two_faces_mask, out=e_use_sharp_mask)
@@ -1081,14 +1205,29 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
                     e_use_sharp_mask = e_more_than_two_faces_mask
 
                 # - Get sharp edges from flat shaded faces
-                p_flat_mask = MESH_ATTRIBUTE_SHARP_FACE.get_ndarray(attributes)
+                # COMPAT ADD BEGIN
+                if not MESH_ATTRIBUTE_SHARP_FACE:
+                    # Get the 'use_smooth' attribute of all polygons.
+                    p_use_smooth_mask = np.empty(mesh_poly_nbr, dtype=poly_use_smooth_dtype)
+                    me.polygons.foreach_get('use_smooth', p_use_smooth_mask)
+                    # Invert to get all flat shaded polygons.
+                    p_flat_mask = np.invert(p_use_smooth_mask, out=p_use_smooth_mask)
+                    del p_use_smooth_mask
+                else:
+                # COMPAT ADD END
+                    p_flat_mask = MESH_ATTRIBUTE_SHARP_FACE.get_ndarray(attributes)
                 if p_flat_mask is not None:
+                    # COMPAT RESTORE BEGIN : From reverted: https://github.com/blender/blender-addons/commit/4140febae1
+                    if sort_polygon_data:
+                        p_flat_mask = p_flat_mask[perm_polygons_to_loop_order]
+                    # COMPAT RESTORE END
                     # Convert flat shaded polygons to flat shaded loops by repeating each element by the number of sides
                     # of that polygon.
-                    # Polygon sides can be calculated from the element-wise difference of loop starts appended by the
-                    # number of loops. Alternatively, polygon sides can be retrieved directly from the 'loop_total'
-                    # attribute of polygons, but since we already have t_ls, it tends to be quicker to calculate from
-                    # t_ls.
+                    # Polygon sides can be calculated from the element-wise difference of sorted loop starts appended by
+                    # the number of loops. Alternatively, polygon sides can be retrieved directly from the 'loop_total'
+                    # attribute of polygons, but that might need to be sorted, and we already have t_ls which is sorted
+                    # loop starts. It tends to be quicker to calculate from t_ls when above around 10_000 polygons even
+                    # when the 'loop_total' array wouldn't need sorting.
                     polygon_sides = np.diff(mesh_t_ls_view, append=mesh_loop_nbr)
                     p_flat_loop_mask = np.repeat(p_flat_mask, polygon_sides)
                     # Convert flat shaded loops to flat shaded (sharp) edge indices.
@@ -1130,10 +1269,20 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
         ec_fbx_dtype = np.float64
         if t_pvi_edge_indices.size:
             ec_bl_dtype = np.single
-            edge_creases = me.edge_creases
+            # COMPAT ADD BEGIN
+            if not api_compat.HAS_REFACTORED_EDGE_CREASES_3_4:
+                edge_creases = me.edges
+                blen_attr = "crease"
+            elif not api_compat.HAS_REFACTORED_EDGE_CREASES_4_0:
+                edge_creases = me.edge_creases[0].data if me.edge_creases else None
+                blen_attr = "value"
+            else:
+            # COMPAT ADD END
+                edge_creases = me.edge_creases.data if me.edge_creases else None
+                blen_attr = "value"
             if edge_creases:
                 t_ec_raw = np.empty(len(me.edges), dtype=ec_bl_dtype)
-                edge_creases.data.foreach_get("value", t_ec_raw)
+                edge_creases.foreach_get(blen_attr, t_ec_raw)
 
                 # Convert to t_pvi edge-keys.
                 t_ec_ek_raw = t_ec_raw[t_pvi_edge_indices]
@@ -1166,30 +1315,56 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
     # Loop normals.
     tspacenumber = 0
     if write_normals:
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            me.calc_normals_split()
+        # COMPAT ADD END
+
         normal_bl_dtype = np.single
         normal_fbx_dtype = np.float64
-        match me.normals_domain:
-            case 'POINT':
-                # All faces are smooth shaded, so we can get normals from the vertices.
-                normal_source = me.vertex_normals
-                normal_mapping = b"ByVertice"
-            # External software support for b"ByPolygon" normals does not seem to be as widely available as the other
-            # mappings. See blender/blender#117470.
-            # case 'FACE':
-            #     # Either all faces or all edges are sharp, so we can get normals from the faces.
-            #     normal_source = me.polygon_normals
-            #     normal_mapping = b"ByPolygon"
-            case 'CORNER' | 'FACE':
-                # We have a mix of sharp/smooth edges/faces or custom split normals, so need to get normals from
-                # corners.
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            normals_domain = 'CORNER'
+        else:
+        # COMPAT ADD END
+            normals_domain = me.normals_domain
+        # COMPAT EDIT BEGIN : Removed use of the match statement (see: fbx_api_compat.HAS_PY_MATCH).
+        if normals_domain == 'POINT':
+        # COMPAT EDIT END
+            # All faces are smooth shaded, so we can get normals from the vertices.
+            normal_source = me.vertex_normals
+            blen_attr = "vector"
+            normal_mapping = b"ByVertice"
+        # External software support for b"ByPolygon" normals does not seem to be as widely available as the other
+        # mappings. See blender/blender#117470.
+        # # COMPAT EDIT BEGIN : Removed use of the match statement (see: fbx_api_compat.HAS_PY_MATCH).
+        # elif normals_domain == 'FACE':
+        # # COMPAT EDIT END
+        #     # Either all faces or all edges are sharp, so we can get normals from the faces.
+        #     normal_source = me.polygon_normals
+        #     blen_attr = "vector"
+        #     normal_mapping = b"ByPolygon"
+        # COMPAT EDIT BEGIN : Removed use of the match statement (see: fbx_api_compat.HAS_PY_MATCH).
+        elif normals_domain in {'CORNER', 'FACE'}:
+        # COMPAT EDIT END
+            # We have a mix of sharp/smooth edges/faces or custom normals, so need to get normals from corners.
+            # COMPAT ADD BEGIN
+            if not api_compat.HAS_CORN_NORM_ARRAY:
+                normal_source = me.loops
+                blen_attr = "normal"
+            else:
+            # COMPAT ADD END
                 normal_source = me.corner_normals
-                normal_mapping = b"ByPolygonVertex"
-            case _:
-                # Unreachable
-                raise AssertionError("Unexpected normals domain '%s'" % me.normals_domain)
+                blen_attr = "vector"
+            normal_mapping = b"ByPolygonVertex"
+        # COMPAT EDIT BEGIN : Removed use of the match statement (see: fbx_api_compat.HAS_PY_MATCH).
+        else:
+        # COMPAT EDIT END
+            # Unreachable
+            raise AssertionError("Unexpected normals domain '%s'" % me.normals_domain)
         # Each normal has 3 components, so the length is multiplied by 3.
         t_normal = np.empty(len(normal_source) * 3, dtype=normal_bl_dtype)
-        normal_source.foreach_get("vector", t_normal)
+        normal_source.foreach_get(blen_attr, t_normal)
         t_normal = nors_transformed(t_normal, geom_mat_no, normal_fbx_dtype)
         normal_idx_fbx_dtype = np.int32
         lay_nor = elem_data_single_int32(geom, b"LayerElementNormal", 0)
@@ -1201,7 +1376,12 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
 
         # Workaround for Unity FBX import issue where the normals are considered invalid if any normals are
         # deduplicated. See #123088.
-        if normal_mapping == b"ByVertice":
+        # Unity FBX also has issues with importing blend shape normals with deduplicated normals, so skip
+        # deduplication if the mesh has shape keys. See !126491.
+        skip_normal_deduplication = (normal_mapping == b"ByVertice") or \
+                                    (me in scene_data.data_deformers_shape)
+
+        if skip_normal_deduplication:
             # Write every normal without any deduplication, so the indices array will be [0, 1, 2, ..., n].
             t_normal_idx = np.arange(len(t_normal.reshape(-1, 3)), dtype=normal_idx_fbx_dtype)
         else:
@@ -1242,14 +1422,16 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
                     del t_lt
                     num_loops = len(me.loops)
                     t_ln = np.empty(num_loops * 3, dtype=normal_bl_dtype)
-                    # t_lnw = np.zeros(len(me.loops), dtype=np.float64)
-                    uv_names = [uvlayer.name for uvlayer in me.uv_layers]
-                    # Annoying, `me.calc_tangent` errors in case there is no geometry...
-                    if num_loops > 0:
-                        for name in uv_names:
+                    # `t_lnw = np.zeros(len(me.loops), dtype=np.float64)`
+                    # WARNING: Since tangent layers are recomputed inside the loop, do not directly iterate over the
+                    # UV-layers. Instead, cache their keys (names), and use this cached data inside the loop to compute
+                    # the tangent layers.
+                    uvlayer_names = [uvl.name for uvl in me.uv_layers]
+                    for idx, name in enumerate(uvlayer_names):
+                        # Annoying, `me.calc_tangent` errors in case there is no geometry...
+                        if num_loops > 0:
                             me.calc_tangents(uvmap=name)
-                    for idx, uvlayer in enumerate(me.uv_layers):
-                        name = uvlayer.name
+
                         # Loop bitangents (aka binormals).
                         # NOTE: this is not supported by importer currently.
                         me.loops.foreach_get("bitangent", t_ln)
@@ -1280,23 +1462,55 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
                     # del t_lnw
                     me.free_tangents()
 
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_REFACTORED_MESH_SMOOTHING:
+            me.free_normals_split()
+        # COMPAT ADD END
+
     # Write VertexColor Layers.
-    colors_type = scene_data.settings.colors_type
-    vcolnumber = 0 if colors_type == 'NONE' else len(me.color_attributes)
-    if vcolnumber:
+    # COMPAT ADD BEGIN
+    using_color_attributes_api = api_compat.HAS_MESH_COL_ATTRS_PROP and api_compat.HAS_COL_ATTR_SRGB_PROP
+    if not using_color_attributes_api:
+        vcollayers = me.vertex_colors
+        vcolnumber = len(vcollayers)
+        color_prop_name = "color"
+    else:
+    # COMPAT ADD END
+        colors_type = scene_data.settings.colors_type
+        vcollayers = me.color_attributes
+        vcolnumber = 0 if colors_type == 'NONE' else len(vcollayers)
         color_prop_name = "color_srgb" if colors_type == 'SRGB' else "color"
+    if vcolnumber:
         # ByteColorAttribute color also gets returned by the API as single precision float
+        # COMPAT NOTE: This is also applicable to the old MeshLoopColorLayer API.
         bl_lc_dtype = np.single
         fbx_lc_dtype = np.float64
         fbx_lcidx_dtype = np.int32
 
-        color_attributes = me.color_attributes
         if scene_data.settings.prioritize_active_color:
-            active_color = me.color_attributes.active_color
-            color_attributes = sorted(color_attributes, key=lambda x: x == active_color, reverse=True)
+            # COMPAT ADD BEGIN
+            if api_compat.HAS_MESH_COL_ATTRS_PROP and not using_color_attributes_api:
+                # After 3.2's "Vertex Colors" -> "Color Attributes" UI change, `LoopColors.active` stopped working,
+                # making `AttributeGroup.active_color` the only way to get the active color layer. But attributes can't
+                # be fully relied on until 3.4 (due to `color_srgb`), so in this brief version window (3.2, 3.3), use
+                # the attribute's name to find the active `MeshLoopColorLayer`.
+                active_color_name = me.color_attributes.active_color.name
+                vcollayers = sorted(vcollayers, key=lambda x: x.name == active_color_name, reverse=True)
+            else:
+                if not using_color_attributes_api:
+                    active_color = me.vertex_colors.active
+                else:
+            # COMPAT ADD END
+                    active_color = me.color_attributes.active_color
+                vcollayers = sorted(vcollayers, key=lambda x: x == active_color, reverse=True)
 
-        for colindex, collayer in enumerate(color_attributes):
-            is_point = collayer.domain == "POINT"
+        for colindex, collayer in enumerate(vcollayers):
+            # COMPAT ADD BEGIN
+            if not using_color_attributes_api:
+                is_point = False
+            else:
+            # COMPAT ADD END
+                is_point = collayer.domain == "POINT"
             vcollen = len(me.vertices if is_point else me.loops)
             # Each rgba component is flattened in the array
             t_lc = np.empty(vcollen * 4, dtype=bl_lc_dtype)
@@ -1340,7 +1554,7 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
         # Fast view for sort-based uniqueness of pairs.
         t_luv_fast_pair_view = fast_first_axis_flat(t_luv.reshape(-1, 2))
         # It must be a view of t_luv otherwise it won't update when t_luv is updated.
-        assert(t_luv_fast_pair_view.base is t_luv)
+        assert t_luv_fast_pair_view.base is t_luv
 
         # Looks like this mapping is also expected to convey UV islands (arg..... :((((( ).
         # So we need to generate unique triplets (uv, vertex_idx) here, not only just based on UV values.
@@ -1356,8 +1570,8 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
         # Because the vertex_idx column is the same for every uv layer, the vertex_idx column can be sorted in advance.
         # argsort gets the indices that sort the array, which are needed to be able to sort the array of uv pairs in the
         # same way to create the indices that recreate the full uvs from the unique uvs.
-        # Loops and vertices tend to naturally have a partial ordering, which makes sorting with kind='stable' (radix
-        # sort) faster than the default of kind='quicksort' (introsort) in most cases.
+        # Loops and vertices tend to naturally have a partial ordering, which makes sorting with kind='stable'
+        # (radix sort) faster than the default of `kind='quicksort'` (`introsort`) in most cases.
         perm_vidx = t_lvidx.argsort(kind='stable')
 
         # Mask and uv indices arrays will be modified and re-used by each uv layer.
@@ -1372,7 +1586,15 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
             elem_data_single_string(lay_uv, b"MappingInformationType", b"ByPolygonVertex")
             elem_data_single_string(lay_uv, b"ReferenceInformationType", b"IndexToDirect")
 
-            uvlayer.uv.foreach_get("vector", t_luv)
+            # COMPAT ADD BEGIN
+            if not api_compat.HAS_UV_LAYER_UV_PROP:
+                blen_data = uvlayer.data
+                blen_attr = "uv"
+            else:
+            # COMPAT ADD END
+                blen_data = uvlayer.uv
+                blen_attr = "vector"
+            blen_data.foreach_get(blen_attr, t_luv)
 
             # t_luv_fast_pair_view is a view in a dtype that compares elements by individual bytes, but float types have
             # separate byte representations of positive and negative zero. For uniqueness, these should be considered
@@ -1383,7 +1605,7 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
             # structured array where each element is a triplet of (uv, vertex_idx), except uv and vertex_idx are
             # separate arrays here and vertex_idx has already been sorted in advance.
 
-            # Sort according to the vertex_idx column, using the precalculated indices that sort it.
+            # Sort according to the `vertex_idx` column, using the pre-calculated indices that sort it.
             sorted_t_luv_fast = t_luv_fast_pair_view[perm_vidx]
 
             # Get the indices that would sort the sorted uv pairs. Stable sorting must be used to maintain the sorting
@@ -1449,12 +1671,26 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
             elem_data_single_string(lay_ma, b"Name", b"")
             nbr_mats = len(me_fbxmaterials_idx)
             multiple_fbx_mats = nbr_mats > 1
-            # If a mesh does not have more than one material its material_index attribute can be ignored.
-            # If a mesh has multiple materials but all its polygons are assigned to the first material, its
-            # material_index attribute may not exist.
-            t_pm = None if not multiple_fbx_mats else MESH_ATTRIBUTE_MATERIAL_INDEX.get_ndarray(attributes)
+            # COMPAT ADD BEGIN
+            if not MESH_ATTRIBUTE_MATERIAL_INDEX:
+                t_pm = None
+                if multiple_fbx_mats:
+                    bl_pm_dtype = np.uintc
+                    t_pm = np.empty(len(me.polygons), dtype=bl_pm_dtype)
+                    me.polygons.foreach_get("material_index", t_pm)
+            else:
+            # COMPAT ADD END
+                # If a mesh does not have more than one material its material_index attribute can be ignored.
+                # If a mesh has multiple materials but all its polygons are assigned to the first material, its
+                # material_index attribute may not exist.
+                t_pm = None if not multiple_fbx_mats else MESH_ATTRIBUTE_MATERIAL_INDEX.get_ndarray(attributes)
             if t_pm is not None:
                 fbx_pm_dtype = np.int32
+
+                # COMPAT RESTORE BEGIN : From reverted: https://github.com/blender/blender-addons/commit/4140febae1
+                if sort_polygon_data:
+                    t_pm = t_pm[perm_polygons_to_loop_order]
+                # COMPAT RESTORE END
 
                 # We have to validate mat indices, and map them to FBX indices.
                 # Note a mat might not be in me_fbxmaterials_idx (e.g. node mats are ignored).
@@ -1495,6 +1731,9 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
                     all_same_idx = 0
                 elem_data_single_int32_array(lay_ma, b"Materials", [all_same_idx])
             del t_pm
+    # COMPAT RESTORE BEGIN : From reverted: https://github.com/blender/blender-addons/commit/4140febae1
+    del perm_polygons_to_loop_order
+    # COMPAT RESTORE END
 
     # And the "layer TOC"...
 
@@ -1511,14 +1750,14 @@ def fbx_data_mesh_elements(root, me_obj, scene_data, done_meshes):
         lay_tan = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_tan, b"Type", b"LayerElementTangent")
         elem_data_single_int32(lay_tan, b"TypedIndex", 0)
-    if smooth_type in {'FACE', 'EDGE'}:
+    if smooth_type in {'FACE', 'EDGE', 'SMOOTH_GROUP'}:
         lay_smooth = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_smooth, b"Type", b"LayerElementSmoothing")
         elem_data_single_int32(lay_smooth, b"TypedIndex", 0)
     if write_crease:
-        lay_smooth = elem_empty(layer, b"LayerElement")
-        elem_data_single_string(lay_smooth, b"Type", b"LayerElementEdgeCrease")
-        elem_data_single_int32(lay_smooth, b"TypedIndex", 0)
+        lay_crease = elem_empty(layer, b"LayerElement")
+        elem_data_single_string(lay_crease, b"Type", b"LayerElementEdgeCrease")
+        elem_data_single_int32(lay_crease, b"TypedIndex", 0)
     if vcolnumber:
         lay_vcol = elem_empty(layer, b"LayerElement")
         elem_data_single_string(lay_vcol, b"Type", b"LayerElementColor")
@@ -1591,7 +1830,13 @@ def fbx_data_material_elements(root, ma, scene_data):
     elem_props_template_set(tmpl, props, "p_number", b"DiffuseFactor", 1.0)
     # Principled BSDF only has an emissive color, so we assume factor to be always 1.0.
     elem_props_template_set(tmpl, props, "p_color", b"EmissiveColor", ma_wrap.emission_color)
-    elem_props_template_set(tmpl, props, "p_number", b"EmissiveFactor", ma_wrap.emission_strength)
+    # COMPAT ADD BEGIN
+    if not api_compat.HAS_BSDF_EMISSION_STRENGTH:
+        emission_strength = 1.0
+    else:
+    ### COMPAT ADD END
+        emission_strength = ma_wrap.emission_strength
+    elem_props_template_set(tmpl, props, "p_number", b"EmissiveFactor", emission_strength)
     # Not in Principled BSDF, so assuming always 0
     elem_props_template_set(tmpl, props, "p_color", b"AmbientColor", ambient_color)
     elem_props_template_set(tmpl, props, "p_number", b"AmbientFactor", 0.0)
@@ -1637,9 +1882,22 @@ def fbx_data_material_elements(root, ma, scene_data):
         fbx_data_element_custom_properties(props, ma)
 
 
+def _get_image_filepath(img):
+    if len(img.filepath) > 0:
+        return img.filepath
+
+    # It's possible to have a packed image without a filepath. Pick a filepath
+    # that is unlikely to conflict.
+    filepath = os.path.join("textures", "packed")
+    if img.library:
+        filepath = os.path.join(filepath, bpy.path.clean_name(img.library.name))
+    return "//" + os.path.join(filepath, bpy.path.clean_name(img.name))
+
+
 def _gen_vid_path(img, scene_data):
     msetts = scene_data.settings.media_settings
-    fname_rel = bpy_extras.io_utils.path_reference(img.filepath, msetts.base_src, msetts.base_dst, msetts.path_mode,
+    img_filepath = _get_image_filepath(img)
+    fname_rel = bpy_extras.io_utils.path_reference(img_filepath, msetts.base_src, msetts.base_dst, msetts.path_mode,
                                                    msetts.subdir, msetts.copy_set, img.library)
     fname_abs = os.path.normpath(os.path.abspath(os.path.join(msetts.base_dst, fname_rel)))
     return fname_abs, fname_rel
@@ -1678,7 +1936,7 @@ def fbx_data_texture_file_elements(root, blender_tex_key, scene_data):
         # ~ else:
         # ~ alpha_source = 2  # Black, i.e. alpha channel.
         alpha_source = 2  # Black, i.e. alpha channel.
-    # BlendMode not useful for now, only affects layered textures afaics.
+    # BlendMode not useful for now, only affects layered textures AFAICS.
     mapping = 0  # UV.
     uvset = None
     if tex.texcoords == 'ORCO':  # XXX Others?
@@ -1713,7 +1971,7 @@ def fbx_data_texture_file_elements(root, blender_tex_key, scene_data):
     elem_props_template_set(tmpl, props, "p_vector_3d", b"Rotation", (-r for r in tex.rotation))
     elem_props_template_set(tmpl, props, "p_vector_3d", b"Scaling",
                             (((1.0 / s) if s != 0.0 else 1.0) for s in tex.scale))
-    # UseMaterial should always be ON imho.
+    # UseMaterial should always be ON IMHO.
     elem_props_template_set(tmpl, props, "p_bool", b"UseMaterial", True)
     elem_props_template_set(tmpl, props, "p_bool", b"UseMipMap", False)
     elem_props_template_finalize(tmpl, props)
@@ -1766,7 +2024,7 @@ def fbx_data_video_elements(root, vid, scene_data):
     # Looks like we'd rather not write any 'Content' element in this case (see T44442).
     # Sounds suspect, but let's try it!
     # ~ else:
-        #~ elem_data_single_bytes(fbx_vid, b"Content", b"")
+        # ~ elem_data_single_bytes(fbx_vid, b"Content", b"")
 
     # Blender currently has no UI for editing custom properties on Images, but the importer will import Image custom
     # properties from either a Video Node or a Texture Node, preferring a Video node if one exists. We'll propagate
@@ -1811,7 +2069,9 @@ def fbx_data_armature_elements(root, arm_obj, scene_data):
         # Store Blender bone length - XXX Not much useful actually :/
         # (LimbLength can't be used because it is a scale factor 0-1 for the parent-child distance:
         # http://docs.autodesk.com/FBX/2014/ENU/FBX-SDK-Documentation/cpp_ref/class_fbx_skeleton.html#a9bbe2a70f4ed82cd162620259e649f0f )
-        # elem_props_set(props, "p_double", "BlenderBoneLength".encode(), (bo.tail_local - bo.head_local).length, custom=True)
+        # elem_props_set(
+        #     props, "p_double", "BlenderBoneLength".encode(), (bo.tail_local - bo.head_local).length, custom=True,
+        # )
 
     # Skin deformers and BindPoses.
     # Note: we might also use Deformers for our "parent to vertex" stuff???
@@ -1838,7 +2098,11 @@ def fbx_data_armature_elements(root, arm_obj, scene_data):
             vgroups = {vg.index: {} for vg in ob.vertex_groups}
             for idx, v in enumerate(me.vertices):
                 for vg in v.groups:
-                    if (w := vg.weight) and (vg_idx := vg.group) in valid_idxs:
+                    # COMPAT EDIT BEGIN : Removed use of the := ("walrus") operator (see: fbx_api_compat.HAS_PY_WALRUS).
+                    w = vg.weight
+                    vg_idx = vg.group
+                    if w and (vg_idx in valid_idxs):
+                    # COMPAT EDIT END
                         vgroups[vg_idx][idx] = w
 
             for bo_obj, clstr_key in clusters.items():
@@ -1862,7 +2126,7 @@ def fbx_data_armature_elements(root, arm_obj, scene_data):
                     elem_data_single_int32_array(fbx_clstr, b"Indexes", indices)
                     elem_data_single_float64_array(fbx_clstr, b"Weights", weights)
                 # Transform, TransformLink and TransformAssociateModel matrices...
-                # They seem to be doublons of BindPose ones??? Have armature (associatemodel) in addition, though.
+                # They seem to be duplicates of BindPose ones??? Have armature (associatemodel) in addition, though.
                 # WARNING! Even though official FBX API presents Transform in global space,
                 #          **it is stored in bone space in FBX data!** See:
                 #          http://area.autodesk.com/forum/autodesk-fbx/fbx-sdk/why-the-values-return-
@@ -2098,12 +2362,11 @@ def fbx_data_animation_elements(root, scene_data):
 # ##### Top-level FBX data container. #####
 
 # Mapping Blender -> FBX (principled_socket_name, fbx_name).
-PRINCIPLED_TEXTURE_SOCKETS_TO_FBX = (
+PRINCIPLED_TEXTURE_SOCKETS_TO_FBX = [
     # ("diffuse", "diffuse", b"DiffuseFactor"),
     ("base_color_texture", b"DiffuseColor"),
     ("alpha_texture", b"TransparencyFactor"),  # Will be inverted in fact, not much we can do really...
     # ("base_color_texture", b"TransparentColor"),  # Uses diffuse color in Blender!
-    ("emission_strength_texture", b"EmissiveFactor"),
     ("emission_color_texture", b"EmissiveColor"),
     # ("ambient", "ambient", b"AmbientFactor"),
     # ("", "", b"AmbientColor"),  # World stuff in Blender, for now ignore...
@@ -2120,7 +2383,11 @@ PRINCIPLED_TEXTURE_SOCKETS_TO_FBX = (
     ("roughness_texture", b"ShininessExponent"),
     # ("mirror", "mirror", b"ReflectionColor"),
     ("metallic_texture", b"ReflectionFactor"),
-)
+]
+# COMPAT ADD BEGIN
+if api_compat.HAS_BSDF_EMISSION_STRENGTH:
+# COMPAT ADD END
+    PRINCIPLED_TEXTURE_SOCKETS_TO_FBX.append(("emission_strength_texture", b"EmissiveFactor"))
 
 
 def fbx_skeleton_from_armature(scene, settings, arm_obj, objects, data_meshes,
@@ -2174,7 +2441,7 @@ def fbx_skeleton_from_armature(scene, settings, arm_obj, objects, data_meshes,
             continue
 
         # Now we have a mesh using this armature.
-        # Note: bindpose have no relations at all (no connections), so no need for any preprocess for them.
+        # Note: bind-pose have no relations at all (no connections), so no need for any preprocess for them.
         # Create skin & clusters relations (note skins are connected to geometry, *not* model!).
         _key, me, _free = data_meshes[ob_obj]
         clusters = {bo: get_blender_bone_cluster_key(arm_obj.bdata, me, bo.bdata) for bo in bones}
@@ -2190,7 +2457,7 @@ def fbx_skeleton_from_armature(scene, settings, arm_obj, objects, data_meshes,
 
 
 def fbx_generate_leaf_bones(settings, data_bones):
-    # find which bons have no children
+    # Find which bones have no children.
     child_count = {bo: 0 for bo in data_bones.keys()}
     for bo in data_bones.keys():
         if bo.parent and bo.parent.is_bone:
@@ -2269,7 +2536,7 @@ def fbx_animations_do(scene_data, ref_id, f_start, f_end, start_zero, objects=No
         # Ignore absolute shape keys for now!
         if not me.shape_keys.use_relative:
             continue
-        for shape, (channel_key, geom_key, _shape_verts_co, _shape_verts_idx) in shapes.items():
+        for shape, (channel_key, geom_key, _shape_verts_co, _shape_verts_nors, _shape_verts_idx) in shapes.items():
             acnode = AnimationCurveNodeWrapper(channel_key, 'SHAPE_KEY', force_key, force_sek, (0.0,))
             # Sooooo happy to have to twist again like a mad snake... Yes, we need to write those curves twice. :/
             acnode.add_group(me_key, shape.name, shape.name, (shape.name,))
@@ -2320,7 +2587,10 @@ def fbx_animations_do(scene_data, ref_id, f_start, f_end, start_zero, objects=No
                 # Changing the scene's frame invalidates existing dupli instances. To get the updated matrices of duplis
                 # for this frame, we must get the duplis from the depsgraph again.
                 for dup in depsgraph.object_instances:
-                    if (parent := dup.parent) and parent.original in dupli_parent_bdata:
+                    # COMPAT EDIT BEGIN : Removed use of the := ("walrus") operator (see: fbx_api_compat.HAS_PY_WALRUS).
+                    parent = dup.parent
+                    if parent and (parent.original in dupli_parent_bdata):
+                    # COMPAT EDIT END
                         # ObjectWrapper caches its instances. Attempting to create a new instance updates the existing
                         # ObjectWrapper instance with the current frame's matrix and then returns the existing instance.
                         ObjectWrapper(dup)
@@ -2469,7 +2739,7 @@ def fbx_animations(scene_data):
             if not ob.animation_data:
                 continue
 
-            # Some actions are read-only, one cause is being in NLA tweakmode
+            # Some actions are read-only, one cause is being in NLA tweak-mode.
             restore_use_tweak_mode = ob.animation_data.use_tweak_mode
             if ob.animation_data.is_property_readonly('action'):
                 ob.animation_data.use_tweak_mode = False
@@ -2569,16 +2839,40 @@ def fbx_animations(scene_data):
 
     # All actions.
     if scene_data.settings.bake_anim_use_all_actions:
-        def validate_actions(act, path_resolve):
-            for fc in act.fcurves:
-                data_path = fc.data_path
-                if fc.array_index:
-                    data_path = data_path + "[%d]" % fc.array_index
-                try:
-                    path_resolve(data_path)
-                except ValueError:
-                    return False  # Invalid.
-            return True  # Valid.
+        def is_fcurve_valid(fc, path_resolve):
+            data_path = fc.data_path
+            if fc.array_index:
+                data_path = data_path + "[%d]" % fc.array_index
+            try:
+                path_resolve(data_path)
+            except ValueError:
+                return False
+            return True
+        
+        # COMPAT ADD BEGIN
+        if not api_compat.HAS_ANIM_LAYERED_1_STABLE:
+            def validate_actions(act, path_resolve):
+                for fc in act.fcurves:
+                    data_path = fc.data_path
+                    if not is_fcurve_valid(fc, path_resolve):
+                        return False  # Invalid.
+                return True  # Valid.
+        else:
+        # COMPAT ADD END
+            def find_validate_action_slot(act, path_resolve) -> bpy.types.ActionSlot | None:
+                for layer in act.layers:
+                    for strip in layer.strips:
+                        for channelbag in strip.channelbags:
+                            if not channelbag.fcurves:
+                                # Do not export empty Channelbags.
+                                continue
+                            for fc in channelbag.fcurves:
+                                if not is_fcurve_valid(fc, path_resolve):
+                                    break  # Invalid, go to next strip.
+                            else:
+                                # Did not 'break', so all F-Curves are valid.
+                                return channelbag.slot
+                return None  # Found nothing to return.
 
         def restore_object(ob_to, ob_from):
             # Restore org state of object (ugh :/ ).
@@ -2618,14 +2912,32 @@ def fbx_animations(scene_data):
             pbones_matrices = [pbo.matrix_basis.copy() for pbo in ob.pose.bones] if ob.type == 'ARMATURE' else ...
 
             org_act = ob.animation_data.action
+            # COMPAT ADD BEGIN
+            if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+            # COMPAT ADD END
+                org_act_slot = ob.animation_data.action_slot
             path_resolve = ob.path_resolve
 
             for act in bpy.data.actions:
                 # For now, *all* paths in the action must be valid for the object, to validate the action.
                 # Unless that action was already assigned to the object!
-                if act != org_act and not validate_actions(act, path_resolve):
-                    continue
+                # COMPAT ADD BEGIN
+                if not api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                    if act != org_act and not validate_actions(act, path_resolve):
+                        continue
+                else:
+                # COMPAT ADD END
+                    if act == org_act:
+                        act_slot = org_act_slot
+                    else:
+                        act_slot = find_validate_action_slot(act, path_resolve)
+                    if not act_slot:
+                        continue
                 ob.animation_data.action = act
+                # COMPAT ADD BEGIN
+                if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                # COMPAT ADD END
+                    ob.animation_data.action_slot = act_slot
                 frame_start, frame_end = act.frame_range  # sic!
                 add_anim(animations, animated,
                          fbx_animations_do(scene_data, (ob, act), frame_start, frame_end, True,
@@ -2635,6 +2947,11 @@ def fbx_animations(scene_data):
                     for pbo, mat in zip(ob.pose.bones, pbones_matrices):
                         pbo.matrix_basis = mat.copy()
                 ob.animation_data.action = org_act
+                # COMPAT ADD BEGIN
+                if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+                # COMPAT ADD END
+                    if org_act:
+                        ob.animation_data.action_slot = org_act_slot
                 restore_object(ob, ob_copy)
                 scene.frame_set(scene.frame_current, subframe=0.0)
 
@@ -2642,6 +2959,11 @@ def fbx_animations(scene_data):
                 for pbo, mat in zip(ob.pose.bones, pbones_matrices):
                     pbo.matrix_basis = mat.copy()
             ob.animation_data.action = org_act
+            # COMPAT ADD BEGIN
+            if api_compat.HAS_ANIM_LAYERED_1_STABLE:
+            # COMPAT ADD END
+                if org_act:
+                    ob.animation_data.action_slot = org_act_slot
 
             bpy.data.objects.remove(ob_copy)
             scene.frame_set(scene.frame_current, subframe=0.0)
@@ -2711,7 +3033,7 @@ def fbx_data_from_scene(scene, depsgraph, settings):
         ob = ob_obj.bdata
         org_ob_obj = None
 
-        # Do not want to systematically recreate a new mesh for dupliobject instances, kind of break purpose of those.
+        # Do not want to systematically recreate a new mesh for dupli-object instances, kind of break purpose of those.
         if ob_obj.is_dupli:
             org_ob_obj = ObjectWrapper(ob)  # We get the "real" object wrapper from that dupli instance.
             if org_ob_obj in data_meshes:
@@ -2783,17 +3105,23 @@ def fbx_data_from_scene(scene, depsgraph, settings):
             # NOTE: The dependency graph might be re-evaluating multiple times, which could
             # potentially free the mesh created early on. So we put those meshes to bmain and
             # free them afterwards. Not ideal but ensures correct ownership.
+            # This also converts non-mesh Objects to Mesh data.
             tmp_me = bpy.data.meshes.new_from_object(
                 ob_to_convert, preserve_all_data_layers=True, depsgraph=depsgraph)
 
-            # Usually the materials of the evaluated object will be the same, but modifiers, such as Geometry Nodes,
-            # can change the materials.
-            orig_mats = tuple(slot.material for slot in ob.material_slots)
-            eval_mats = tuple(slot.material.original if slot.material else None
-                              for slot in ob_to_convert.material_slots)
+            # Usually the materials of the evaluated Object converted to a Mesh will be the same as the original
+            # Object, but modifiers, such as Geometry Nodes, can change the materials.
+            orig_mats = [slot.material for slot in ob.material_slots]
+            eval_mats = list(tmp_me.materials)
             if orig_mats != eval_mats:
+                # An object-linked material slot replaces the material on the data at the slot's index. If applying
+                # modifiers changes the materials on the data, the object-linked material slot will replace the new
+                # material at the same index as before.
+                for i, slot in zip(range(len(eval_mats)), ob.material_slots):
+                    if slot.link == 'OBJECT':
+                        eval_mats[i] = slot.material
                 # Override the default behavior of getting materials from `ob_obj.bdata.material_slots`.
-                ob_obj.override_materials = eval_mats
+                ob_obj.override_materials = tuple(eval_mats)
         elif do_convert:
             tmp_me = bpy.data.meshes.new_from_object(ob, preserve_all_data_layers=True, depsgraph=depsgraph)
         elif do_copy:
@@ -2841,17 +3169,26 @@ def fbx_data_from_scene(scene, depsgraph, settings):
     co_bl_dtype = np.single
     co_fbx_dtype = np.float64
     idx_fbx_dtype = np.int32
+    normal_bl_dtype = np.single
+    normal_fbx_dtype = np.float64
+    geom_mat_no = Matrix(settings.global_matrix_inv_transposed) if settings.bake_space_transform else None
+    if geom_mat_no is not None:
+        # Remove translation & scaling!
+        geom_mat_no.translation = Vector()
+        geom_mat_no.normalize()
 
     def empty_verts_fallbacks():
         """Create fallback arrays for when there are no verts"""
         # FBX does not like empty shapes (makes Unity crash e.g.).
         # To prevent this, we add a vertex that does nothing, but it keeps the shape key intact
         single_vert_co = np.zeros((1, 3), dtype=co_fbx_dtype)
+        single_vert_nor = np.zeros((1, 3), dtype=co_fbx_dtype)
         single_vert_idx = np.zeros(1, dtype=idx_fbx_dtype)
-        return single_vert_co, single_vert_idx
+        return single_vert_co, single_vert_nor, single_vert_idx
 
     for me_key, me, _free in data_meshes.values():
-        if not (me.shape_keys and len(me.shape_keys.key_blocks) > 1):  # We do not want basis-only relative skeys...
+        # We do not want basis-only relative shape-keys.
+        if not (me.shape_keys and len(me.shape_keys.key_blocks) > 1):
             continue
         if me in data_deformers_shape:
             continue
@@ -2860,40 +3197,73 @@ def fbx_data_from_scene(scene, depsgraph, settings):
 
         sk_base = me.shape_keys.key_blocks[0]
 
+        # COMPAT ADD BEGIN: HACK: Fallback to basis normals in 3.1.X. See: HAS_FIXED_SHAPEKEY_NORM_AFTER_NORM_REFACTOR
+        _override_sk_nors = None
+        if api_compat.HAS_REFACTORED_MESH_NORM and not api_compat.HAS_FIXED_SHAPEKEY_NORM_AFTER_NORM_REFACTOR:
+            _override_sk_nors = np.empty(len(me.vertices) * 3, dtype=normal_bl_dtype)
+            me.vertices.foreach_get("normal", _override_sk_nors)
+            _override_sk_nors = nors_transformed(_override_sk_nors, geom_mat_no, normal_fbx_dtype)
+        # COMPAT ADD END
+
         # Get and cache only the cos that we need
         @cache
-        def sk_cos(shape_key):
+        def sk_cos_nors(shape_key):
             if shape_key == sk_base:
-                _cos = MESH_ATTRIBUTE_POSITION.to_ndarray(me.attributes)
+                # COMPAT ADD BEGIN
+                if not MESH_ATTRIBUTE_POSITION:
+                    _cos = np.empty(len(me.vertices) * 3, dtype=co_bl_dtype)
+                    me.vertices.foreach_get("co", _cos)
+                else:
+                # COMPAT ADD END
+                    _cos = MESH_ATTRIBUTE_POSITION.to_ndarray(me.attributes)
             else:
                 _cos = np.empty(len(me.vertices) * 3, dtype=co_bl_dtype)
-                shape_key.points.foreach_get("co", _cos)
-            return vcos_transformed(_cos, geom_mat_co, co_fbx_dtype)
+                # COMPAT ADD BEGIN
+                if not api_compat.HAS_SHAPEKEY_POINTS_PROP:
+                    shape_key.data.foreach_get("co", _cos)
+                else:
+                # COMPAT ADD END
+                    shape_key.points.foreach_get("co", _cos)
+            # COMPAT ADD BEGIN
+            if _override_sk_nors is not None:
+                _nors = _override_sk_nors
+            else:
+            # COMPAT ADD END
+                _nors = np.array(shape_key.normals_vertex_get(), dtype=normal_bl_dtype)
+                _nors = nors_transformed(_nors, geom_mat_no, normal_fbx_dtype)
+            return (
+                vcos_transformed(_cos, geom_mat_co, co_fbx_dtype),
+                _nors
+            )
 
         for shape in me.shape_keys.key_blocks[1:]:
             # Only write vertices really different from base coordinates!
             relative_key = shape.relative_key
             if shape == relative_key:
                 # Shape is its own relative key, so it does nothing
-                shape_verts_co, shape_verts_idx = empty_verts_fallbacks()
+                shape_verts_co, shape_verts_nors, shape_verts_idx = empty_verts_fallbacks()
             else:
-                sv_cos = sk_cos(shape)
-                ref_cos = sk_cos(shape.relative_key)
+                sv_cos_nors = sk_cos_nors(shape)
+                ref_cos_nors = sk_cos_nors(shape.relative_key)
 
                 # Exclude cos similar to ref_cos and get the indices of the cos that remain
-                shape_verts_co, shape_verts_idx = shape_difference_exclude_similar(sv_cos, ref_cos)
+                shape_verts_co, shape_verts_nors, shape_verts_idx = shape_difference_exclude_similar(
+                    sv_cos_nors, ref_cos_nors)
 
                 if not shape_verts_co.size:
-                    shape_verts_co, shape_verts_idx = empty_verts_fallbacks()
+                    shape_verts_co, shape_verts_nors, shape_verts_idx = empty_verts_fallbacks()
                 else:
                     # Ensure the indices are of the correct type
                     shape_verts_idx = astype_view_signedness(shape_verts_idx, idx_fbx_dtype)
 
             channel_key, geom_key = get_blender_mesh_shape_channel_key(me, shape)
-            data = (channel_key, geom_key, shape_verts_co, shape_verts_idx)
+            data = (channel_key, geom_key, shape_verts_co, shape_verts_nors, shape_verts_idx)
             data_deformers_shape.setdefault(me, (me_key, shapes_key, {}))[2][shape] = data
 
-        del sk_cos
+        del sk_cos_nors
+        # COMPAT ADD BEGIN
+        del _override_sk_nors
+        # COMPAT ADD END
 
     perfmon.step("FBX export prepare: Wrapping Armatures...")
 
@@ -3020,7 +3390,7 @@ def fbx_data_from_scene(scene, depsgraph, settings):
         if data_deformers_shape:
             nbr += len(data_deformers_shape)
             nbr += sum(len(shapes[2]) for shapes in data_deformers_shape.values())
-        assert(nbr != 0)
+        assert nbr != 0
         templates[b"Deformers"] = fbx_template_def_deformer(scene, settings, nbr_users=nbr)
 
     # No world support in FBX...
@@ -3121,7 +3491,7 @@ def fbx_data_from_scene(scene, depsgraph, settings):
     for me_key, shapes_key, shapes in data_deformers_shape.values():
         # shape -> geometry
         connections.append((b"OO", get_fbx_uuid_from_key(shapes_key), get_fbx_uuid_from_key(me_key), None))
-        for channel_key, geom_key, _shape_verts_co, _shape_verts_idx in shapes.values():
+        for channel_key, geom_key, _shape_verts_co, _shape_verts_nors, _shape_verts_idx in shapes.values():
             # shape channel -> shape
             connections.append((b"OO", get_fbx_uuid_from_key(channel_key), get_fbx_uuid_from_key(shapes_key), None))
             # geometry (keys) -> shape channel
@@ -3132,7 +3502,7 @@ def fbx_data_from_scene(scene, depsgraph, settings):
         for me, (skin_key, ob_obj, clusters) in deformed_meshes.items():
             # skin -> geometry
             mesh_key, _me, _free = data_meshes[ob_obj]
-            assert(me == _me)
+            assert me == _me
             connections.append((b"OO", get_fbx_uuid_from_key(skin_key), get_fbx_uuid_from_key(mesh_key), None))
             for bo_obj, clstr_key in clusters.items():
                 # cluster -> skin
@@ -3142,24 +3512,37 @@ def fbx_data_from_scene(scene, depsgraph, settings):
 
     # Materials
     mesh_material_indices = {}
-    _objs_indices = {}
-    for ma, (ma_key, ob_objs) in data_materials.items():
-        for ob_obj in ob_objs:
+    for ob_obj in objects:
+        ob_mat_idx = 0
+        me = None
+        if ob_obj.type in BLENDER_OBJECT_TYPES_MESHLIKE:
+            _mesh_key, me, _free = data_meshes[ob_obj]
+        # NOTE: If a mesh has multiple material slots with the same material, they are combined into one
+        # single connection (slot).
+        # Even if duplicate materials were exported without combining them into one slot, keeping duplicate
+        # materials separated does not appear to be common behavior of external software when importing FBX.
+        # Also, None (empty slots, no material) are always skipped/ignored.
+        done_materials_for_object = {None}
+        for ma in ob_obj.materials:
+            if ma in done_materials_for_object:
+                continue
+            done_materials_for_object.add(ma)
+            ma_key, _ob_objs = data_materials[ma]
             connections.append((b"OO", get_fbx_uuid_from_key(ma_key), ob_obj.fbx_uuid, None))
-            # Get index of this material for this object (or dupliobject).
+            # Get index of this material for this object (or dupli-object).
             # Material indices for mesh faces are determined by their order in 'ma to ob' connections.
             # Only materials for meshes currently...
-            # Note in case of dupliobjects a same me/ma idx will be generated several times...
+            # Note in case of dupli-objects a same me/ma idx will be generated several times...
             # Should not be an issue in practice, and it's needed in case we export duplis but not the original!
             if ob_obj.type not in BLENDER_OBJECT_TYPES_MESHLIKE:
                 continue
-            _mesh_key, me, _free = data_meshes[ob_obj]
-            idx = _objs_indices[ob_obj] = _objs_indices.get(ob_obj, -1) + 1
-            # XXX If a mesh has multiple material slots with the same material, they are combined into one slot.
-            # Even if duplicate materials were exported without combining them into one slot, keeping duplicate
-            # materials separated does not appear to be common behavior of external software when importing FBX.
-            mesh_material_indices.setdefault(me, {})[ma] = idx
-    del _objs_indices
+            if ma not in mesh_material_indices.setdefault(me, {}):
+                mesh_material_indices[me][ma] = ob_mat_idx
+            else:
+                print("WARNING: Cannot register a valid material index for '{}' from '{}' mesh, '{}' object. "
+                      "Most likely, different objects using the same mesh, but different material slots layouts."
+                      "".format(ma.name, me.name, ob_obj.name))
+            ob_mat_idx += 1
 
     # Textures
     for (ma, sock_name), (tex_key, fbx_prop) in data_textures.items():
@@ -3178,14 +3561,14 @@ def fbx_data_from_scene(scene, depsgraph, settings):
     """
     # Animations
     for astack_key, astack, alayer_key, _name, _fstart, _fend in animations:
-        # Animstack itself is linked nowhere!
+        # Anim-stack itself is linked nowhere!
         astack_id = get_fbx_uuid_from_key(astack_key)
         # For now, only one layer!
         alayer_id = get_fbx_uuid_from_key(alayer_key)
         connections.append((b"OO", alayer_id, astack_id, None))
         for elem_key, (alayer_key, acurvenodes) in astack.items():
             elem_id = get_fbx_uuid_from_key(elem_key)
-            # Animlayer -> animstack.
+            # Anim-layer -> animstack.
             # alayer_id = get_fbx_uuid_from_key(alayer_key)
             # connections.append((b"OO", alayer_id, astack_id, None))
             for fbx_prop, (acurvenode_key, acurves, acurvenode_name) in acurvenodes.items():
@@ -3237,25 +3620,28 @@ def fbx_header_elements(root, scene_data, time=None):
     app_name = "Blender (stable FBX IO - AHiT patch)"  # UnDrew Edit : Rename.
     app_ver = bpy.app.version_string
 
-    # UnDrew Edit Start : Seemingly can't use bl_info for extensions. Read version from TOML directly... I guess.
+    # COMPAT ADD BEGIN
     addon_ver = "Unknown add-on version"
     try:
-        import toml
-        with open(os.path.join(os.path.dirname(__file__), 'blender_manifest.toml'), 'r') as f:
-            config = toml.load(f)
-            addon_ver = config['version']
-        del toml
-    except:
-        pass
-    
-    """ vvv Original code vvv
-
-    from . import bl_info
-    addon_ver = bl_info["version"]
-    del bl_info
-
-    """
-    # UnDrew Edit End
+        if api_compat.HAS_EXTENSION_SUPPORT:
+            import tomllib
+            with open(os.path.join(os.path.dirname(__file__), 'blender_manifest.toml'), 'rb') as f:
+                config = tomllib.load(f)
+                addon_ver = config['version']
+            del tomllib
+        else:
+    # COMPAT ADD END
+            from . import bl_info
+            addon_ver = bl_info["version"]
+            addon_ver = "%d.%d.%d" % (addon_ver[0], addon_ver[1], addon_ver[2])
+            del bl_info
+    # COMPAT ADD BEGIN
+    except Exception as e:
+        print("WARNING: Unable to get add-on version from",
+              ".toml!" if api_compat.HAS_EXTENSION_SUPPORT else "bl_info!",
+              "Writing add-on ver as unknown. Raised:",
+              e)
+    # COMPAT ADD END
 
     # ##### Start of FBXHeaderExtension element.
     header_ext = elem_empty(root, b"FBXHeaderExtension")
@@ -3279,10 +3665,8 @@ def fbx_header_elements(root, scene_data, time=None):
     elem_data_single_int32(elem, b"Second", time.second)
     elem_data_single_int32(elem, b"Millisecond", time.microsecond // 1000)
 
-    # UnDrew Edit Start : addon_ver was changed to a string - white it as one.
     elem_data_single_string_unicode(header_ext, b"Creator", "%s - %s - %s"
                                                 % (app_name, app_ver, addon_ver))
-    # UnDrew Edit End
 
     # 'SceneInfo' seems mandatory to get a valid FBX file...
     # TODO use real values!
@@ -3327,10 +3711,8 @@ def fbx_header_elements(root, scene_data, time=None):
                                     "".format(time.year, time.month, time.day, time.hour, time.minute, time.second,
                                               time.microsecond * 1000))
 
-    # UnDrew Edit Start : addon_ver was changed to a string - white it as one.
     elem_data_single_string_unicode(root, b"Creator", "%s - %s - %s"
                                           % (app_name, app_ver, addon_ver))
-    # UnDrew Edit End
 
     # ##### Start of GlobalSettings element.
     global_settings = elem_empty(root, b"GlobalSettings")
@@ -3365,7 +3747,7 @@ def fbx_header_elements(root, scene_data, time=None):
 
     # Global timing data.
     r = scene.render
-    _, fbx_fps_mode = FBX_FRAMERATES[0]  # Custom framerate.
+    _, fbx_fps_mode = FBX_FRAMERATES[0]  # Custom frame-rate.
     fbx_fps = fps = r.fps / r.fps_base
     for ref_fps, fps_mode in FBX_FRAMERATES:
         if similar_values(fps, ref_fps):
@@ -3416,7 +3798,7 @@ def fbx_references_elements(root, scene_data):
 
 def fbx_definitions_elements(root, scene_data):
     """
-    Templates definitions. Only used by Objects data afaik (apart from dummy GlobalSettings one).
+    Templates definitions. Only used by Objects data AFAIK (apart from dummy GlobalSettings one).
     """
     definitions = elem_empty(root, b"Definitions")
 
@@ -3989,7 +4371,7 @@ def defaults_unity3d():
         "bake_anim_step": 1.0,
         "bake_anim_use_nla_strips": True,
         "bake_anim_use_all_actions": True,
-        "add_leaf_bones": False,  # Avoid memory/performance cost for something only useful for modelling
+        "add_leaf_bones": False,  # Avoid memory/performance cost for something only useful for modeling.
         "primary_bone_axis": 'Y',  # Doesn't really matter for Unity, so leave unchanged
         "secondary_bone_axis": 'X',
 

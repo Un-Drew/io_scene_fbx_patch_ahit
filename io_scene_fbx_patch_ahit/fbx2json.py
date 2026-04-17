@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-# SPDX-License-Identifier: GPL-2.0-or-later
-
-# Script copyright (C) 2006-2012, assimp team
-# Script copyright (C) 2013 Blender Foundation
-
 """
 Usage
 =====
@@ -23,14 +17,15 @@ The JSON data is formatted into a list of nested lists of 4 items:
 Where each list may be empty, and the items in
 the subtree are formatted the same way.
 
-data_types is a string, aligned with data that spesifies a type
+data_types is a string, aligned with data that specifies a type
 for each property.
 
 The types are as follows:
 
 * 'Z': - INT8
 * 'Y': - INT16
-* 'C': - BOOL
+* 'B': - BOOL
+* 'C': - CHAR
 * 'I': - INT32
 * 'F': - FLOAT32
 * 'D': - FLOAT64
@@ -98,7 +93,7 @@ def unpack_array(read, array_type, array_stride, array_byteswap):
     elif encoding == 1:
         data = zlib.decompress(data)
 
-    assert(length * array_stride == len(data))
+    assert length * array_stride == len(data)
 
     data_array = array.array(array_type, data)
     if array_byteswap and _IS_BIG_ENDIAN:
@@ -109,7 +104,8 @@ def unpack_array(read, array_type, array_stride, array_byteswap):
 read_data_dict = {
     b'Z'[0]: lambda read: unpack(b'<b', read(1))[0],  # 8 bit int
     b'Y'[0]: lambda read: unpack(b'<h', read(2))[0],  # 16 bit int
-    b'C'[0]: lambda read: unpack(b'?', read(1))[0],   # 1 bit bool (yes/no)
+    b'B'[0]: lambda read: unpack(b'?', read(1))[0],   # 1 bit bool (yes/no)
+    b'C'[0]: lambda read: unpack(b'<c', read(1))[0],  # char
     b'I'[0]: lambda read: unpack(b'<i', read(4))[0],  # 32 bit int
     b'F'[0]: lambda read: unpack(b'<f', read(4))[0],  # 32 bit float
     b'D'[0]: lambda read: unpack(b'<d', read(8))[0],  # 64 bit float
@@ -122,7 +118,7 @@ read_data_dict = {
     b'l'[0]: lambda read: unpack_array(read, 'q', 8, True),   # array (long)
     b'b'[0]: lambda read: unpack_array(read, 'b', 1, False),  # array (bool)
     b'c'[0]: lambda read: unpack_array(read, 'B', 1, False),  # array (ubyte)
-    }
+}
 
 
 # FBX 7500 (aka FBX2016) introduces incompatible changes at binary level:
@@ -131,8 +127,8 @@ read_data_dict = {
 def init_version(fbx_version):
     global _BLOCK_SENTINEL_LENGTH, _BLOCK_SENTINEL_DATA, read_fbx_elem_uint
 
-    assert(_BLOCK_SENTINEL_LENGTH == ...)
-    assert(_BLOCK_SENTINEL_DATA == ...)
+    assert _BLOCK_SENTINEL_LENGTH == ...
+    assert _BLOCK_SENTINEL_DATA == ...
 
     if fbx_version < 7500:
         _BLOCK_SENTINEL_LENGTH = 13
@@ -222,35 +218,36 @@ def parse(fn, use_namedtuple=True):
 # pyfbx.data_types
 data_types = type(array)("data_types")
 data_types.__dict__.update(
-dict(
-INT8 = b'Z'[0],
-INT16 = b'Y'[0],
-BOOL = b'C'[0],
-INT32 = b'I'[0],
-FLOAT32 = b'F'[0],
-FLOAT64 = b'D'[0],
-INT64 = b'L'[0],
-BYTES = b'R'[0],
-STRING = b'S'[0],
-FLOAT32_ARRAY = b'f'[0],
-INT32_ARRAY = b'i'[0],
-FLOAT64_ARRAY = b'd'[0],
-INT64_ARRAY = b'l'[0],
-BOOL_ARRAY = b'b'[0],
-BYTE_ARRAY = b'c'[0],
-))
+    dict(
+        INT8=b'Z'[0],
+        INT16=b'Y'[0],
+        BOOL=b'B'[0],
+        CHAR=b'C'[0],
+        INT32=b'I'[0],
+        FLOAT32=b'F'[0],
+        FLOAT64=b'D'[0],
+        INT64=b'L'[0],
+        BYTES=b'R'[0],
+        STRING=b'S'[0],
+        FLOAT32_ARRAY=b'f'[0],
+        INT32_ARRAY=b'i'[0],
+        FLOAT64_ARRAY=b'd'[0],
+        INT64_ARRAY=b'l'[0],
+        BOOL_ARRAY=b'b'[0],
+        BYTE_ARRAY=b'c'[0],
+    ))
 
 # pyfbx.parse_bin
 parse_bin = type(array)("parse_bin")
 parse_bin.__dict__.update(
-dict(
-parse = parse
-))
+    dict(
+        parse=parse
+    ))
 
 
 # ----------------------------------------------------------------------------
 # JSON Converter
-# from pyfbx import parse_bin, data_types
+# from PyFBX import parse_bin, data_types
 import json
 import array
 

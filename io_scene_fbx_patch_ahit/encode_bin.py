@@ -1,19 +1,20 @@
-# SPDX-License-Identifier: GPL-2.0-or-later
-
-# Script copyright (C) 2013 Campbell Barton
-
 try:
     from . import data_types
+    from .fbx_utils_threading import MultiThreadedTaskConsumer
 except:
     import data_types
+    from fbx_utils_threading import MultiThreadedTaskConsumer
 
 from struct import pack
+from contextlib import contextmanager
 import array
 import numpy as np
 import zlib
 
-_BLOCK_SENTINEL_LENGTH = 13
-_BLOCK_SENTINEL_DATA = (b'\0' * _BLOCK_SENTINEL_LENGTH)
+_BLOCK_SENTINEL_LENGTH = ...
+_BLOCK_SENTINEL_DATA = ...
+_ELEM_META_FORMAT = ...
+_ELEM_META_SIZE = ...
 _IS_BIG_ENDIAN = (__import__("sys").byteorder != 'little')
 _HEAD_MAGIC = b'Kaydara FBX Binary\x20\x20\x00\x1a\x00'
 
@@ -38,10 +39,10 @@ class FBXElem:
 
         "_props_length",  # combine length of props
         "_end_offset",  # byte offset from the start of the file.
-        )
+    )
 
     def __init__(self, id):
-        assert(len(id) < 256)  # length must fit in a uint8
+        assert len(id) < 256  # length must fit in a uint8
         self.id = id
         self.props = []
         self.props_type = bytearray()
@@ -49,96 +50,160 @@ class FBXElem:
         self._end_offset = -1
         self._props_length = -1
 
+    @classmethod
+    @contextmanager
+    def enable_multithreading_cm(cls):
+        """Temporarily enable multithreaded array compression.
+
+        The context manager handles starting up and shutting down the threads.
+
+        Only exits once all the threads are done (either all tasks were completed or an error occurred and the threads
+        were stopped prematurely).
+
+        Writing to a file is temporarily disabled as a safeguard."""
+        # __enter__()
+        orig_func = cls._add_compressed_array_helper
+        orig_write = cls._write
+
+        def insert_compressed_array(props, insert_at, data, length):
+            # zlib.compress releases the GIL, so can be multithreaded.
+            data = zlib.compress(data, 1)
+            comp_len = len(data)
+
+            encoding = 1
+            data = pack('<3I', length, encoding, comp_len) + data
+            props[insert_at] = data
+
+        with MultiThreadedTaskConsumer.new_cpu_bound_cm(insert_compressed_array) as wrapped_func:
+            try:
+                def _add_compressed_array_helper_multi(self, data, length):
+                    # Append a dummy value that will be replaced with the compressed array data later.
+                    self.props.append(...)
+                    # The index to insert the compressed array into.
+                    insert_at = len(self.props) - 1
+                    # Schedule the array to be compressed on a separate thread and then inserted into the hierarchy at
+                    # `insert_at`.
+                    wrapped_func(self.props, insert_at, data, length)
+
+                # As an extra safeguard, temporarily replace the `_write` function to raise an error if called.
+                def temp_write(*_args, **_kwargs):
+                    raise RuntimeError("Writing is not allowed until multithreaded array compression has been disabled")
+
+                cls._add_compressed_array_helper = _add_compressed_array_helper_multi
+                cls._write = temp_write
+
+                # Return control back to the caller of __enter__().
+                yield
+            finally:
+                # __exit__()
+                # Restore the original functions.
+                cls._add_compressed_array_helper = orig_func
+                cls._write = orig_write
+            # Exiting the MultiThreadedTaskConsumer context manager will wait for all scheduled tasks to complete.
+
     def add_bool(self, data):
-        assert(isinstance(data, bool))
+        assert isinstance(data, bool)
         data = pack('?', data)
 
         self.props_type.append(data_types.BOOL)
         self.props.append(data)
 
+    def add_char(self, data):
+        assert isinstance(data, bytes)
+        assert len(data) == 1
+        data = pack('<c', data)
+
+        self.props_type.append(data_types.CHAR)
+        self.props.append(data)
+
     def add_int8(self, data):
-        assert(isinstance(data, int))
+        assert isinstance(data, int)
         data = pack('<b', data)
 
         self.props_type.append(data_types.INT8)
         self.props.append(data)
 
     def add_int16(self, data):
-        assert(isinstance(data, int))
+        assert isinstance(data, int)
         data = pack('<h', data)
 
         self.props_type.append(data_types.INT16)
         self.props.append(data)
 
     def add_int32(self, data):
-        assert(isinstance(data, int))
+        assert isinstance(data, int)
         data = pack('<i', data)
 
         self.props_type.append(data_types.INT32)
         self.props.append(data)
 
     def add_int64(self, data):
-        assert(isinstance(data, int))
+        assert isinstance(data, int)
         data = pack('<q', data)
 
         self.props_type.append(data_types.INT64)
         self.props.append(data)
 
     def add_float32(self, data):
-        assert(isinstance(data, float))
+        assert isinstance(data, float)
         data = pack('<f', data)
 
         self.props_type.append(data_types.FLOAT32)
         self.props.append(data)
 
     def add_float64(self, data):
-        assert(isinstance(data, float))
+        assert isinstance(data, float)
         data = pack('<d', data)
 
         self.props_type.append(data_types.FLOAT64)
         self.props.append(data)
 
     def add_bytes(self, data):
-        assert(isinstance(data, bytes))
+        assert isinstance(data, bytes)
         data = pack('<I', len(data)) + data
 
         self.props_type.append(data_types.BYTES)
         self.props.append(data)
 
     def add_string(self, data):
-        assert(isinstance(data, bytes))
+        assert isinstance(data, bytes)
         data = pack('<I', len(data)) + data
 
         self.props_type.append(data_types.STRING)
         self.props.append(data)
 
     def add_string_unicode(self, data):
-        assert(isinstance(data, str))
+        assert isinstance(data, str)
         data = data.encode('utf8')
         data = pack('<I', len(data)) + data
 
         self.props_type.append(data_types.STRING)
         self.props.append(data)
 
+    def _add_compressed_array_helper(self, data, length):
+        """Note: This function may be swapped out by enable_multithreading_cm with an equivalent that supports
+        multithreading."""
+        data = zlib.compress(data, 1)
+        comp_len = len(data)
+
+        encoding = 1
+        data = pack('<3I', length, encoding, comp_len) + data
+        self.props.append(data)
+
     def _add_array_helper(self, data, prop_type, length):
-        # mimic behavior of fbxconverter (also common sense)
+        self.props_type.append(prop_type)
+        # Mimic behavior of `fbxconverter` (also common sense)
         # we could make this configurable.
         encoding = 0 if len(data) <= 128 else 1
         if encoding == 0:
-            pass
+            data = pack('<3I', length, encoding, len(data)) + data
+            self.props.append(data)
         elif encoding == 1:
-            data = zlib.compress(data, 1)
-
-        comp_len = len(data)
-
-        data = pack('<3I', length, encoding, comp_len) + data
-
-        self.props_type.append(prop_type)
-        self.props.append(data)
+            self._add_compressed_array_helper(data, length)
 
     def _add_parray_helper(self, data, array_type, prop_type):
-        assert (isinstance(data, array.array))
-        assert (data.typecode == array_type)
+        assert isinstance(data, array.array)
+        assert data.typecode == array_type
 
         length = len(data)
 
@@ -150,8 +215,8 @@ class FBXElem:
         self._add_array_helper(data, prop_type, length)
 
     def _add_ndarray_helper(self, data, dtype, prop_type):
-        assert (isinstance(data, np.ndarray))
-        assert (data.dtype == dtype)
+        assert isinstance(data, np.ndarray)
+        assert data.dtype == dtype
 
         length = data.size
 
@@ -216,10 +281,10 @@ class FBXElem:
         """
         Call before writing, calculates fixed offsets.
         """
-        assert(self._end_offset == -1)
-        assert(self._props_length == -1)
+        assert self._end_offset == -1
+        assert self._props_length == -1
 
-        offset += 12  # 3 uints
+        offset += _ELEM_META_SIZE  # `uint[3]` (or `ulonglong[3]`  for FBX 7500 and later).
         offset += 1 + len(self.id)  # len + idname
 
         props_length = 0
@@ -240,17 +305,16 @@ class FBXElem:
             for elem in self.elems:
                 offset = elem._calc_offsets(offset, (elem is elem_last))
             offset += _BLOCK_SENTINEL_LENGTH
-        elif not self.props or self.id in _ELEMS_ID_ALWAYS_BLOCK_SENTINEL:
-            if not is_last:
-                offset += _BLOCK_SENTINEL_LENGTH
+        elif (not self.props and not is_last) or self.id in _ELEMS_ID_ALWAYS_BLOCK_SENTINEL:
+            offset += _BLOCK_SENTINEL_LENGTH
 
         return offset
 
     def _write(self, write, tell, is_last):
-        assert(self._end_offset != -1)
-        assert(self._props_length != -1)
+        assert self._end_offset != -1
+        assert self._props_length != -1
 
-        write(pack('<3I', self._end_offset, len(self.props), self._props_length))
+        write(pack(_ELEM_META_FORMAT, self._end_offset, len(self.props), self._props_length))
 
         write(bytes((len(self.id),)))
         write(self.id)
@@ -263,18 +327,17 @@ class FBXElem:
 
         if tell() != self._end_offset:
             raise IOError("scope length not reached, "
-                          "something is wrong (%d)" % (end_offset - tell()))
+                          "something is wrong (%d)" % (self._end_offset - tell()))
 
     def _write_children(self, write, tell, is_last):
         if self.elems:
             elem_last = self.elems[-1]
             for elem in self.elems:
-                assert(elem.id != b'')
+                assert elem.id != b''
                 elem._write(write, tell, (elem is elem_last))
             write(_BLOCK_SENTINEL_DATA)
-        elif not self.props or self.id in _ELEMS_ID_ALWAYS_BLOCK_SENTINEL:
-            if not is_last:
-                write(_BLOCK_SENTINEL_DATA)
+        elif (not self.props and not is_last) or self.id in _ELEMS_ID_ALWAYS_BLOCK_SENTINEL:
+            write(_BLOCK_SENTINEL_DATA)
 
 
 def _write_timedate_hack(elem_root):
@@ -285,16 +348,16 @@ def _write_timedate_hack(elem_root):
     ok = 0
     for elem in elem_root.elems:
         if elem.id == b'FileId':
-            assert(elem.props_type[0] == b'R'[0])
-            assert(len(elem.props_type) == 1)
+            assert elem.props_type[0] == b'R'[0]
+            assert len(elem.props_type) == 1
             elem.props.clear()
             elem.props_type.clear()
 
             elem.add_bytes(_FILE_ID)
             ok += 1
         elif elem.id == b'CreationTime':
-            assert(elem.props_type[0] == b'S'[0])
-            assert(len(elem.props_type) == 1)
+            assert elem.props_type[0] == b'S'[0]
+            assert len(elem.props_type) == 1
             elem.props.clear()
             elem.props_type.clear()
 
@@ -308,12 +371,35 @@ def _write_timedate_hack(elem_root):
         print("Missing fields!")
 
 
+# FBX 7500 (aka FBX2016) introduces incompatible changes at binary level:
+#   * The NULL block marking end of nested stuff switches from 13 bytes long to 25 bytes long.
+#   * The FBX element metadata (end_offset, prop_count and prop_length) switch from uint32 to uint64.
+def init_version(fbx_version):
+    global _BLOCK_SENTINEL_LENGTH, _BLOCK_SENTINEL_DATA, _ELEM_META_FORMAT, _ELEM_META_SIZE
+
+    _BLOCK_SENTINEL_LENGTH = ...
+    _BLOCK_SENTINEL_DATA = ...
+    _ELEM_META_FORMAT = ...
+    _ELEM_META_SIZE = ...
+
+    if fbx_version < 7500:
+        _ELEM_META_FORMAT = '<3I'
+        _ELEM_META_SIZE = 12
+    else:
+        _ELEM_META_FORMAT = '<3Q'
+        _ELEM_META_SIZE = 24
+    _BLOCK_SENTINEL_LENGTH = _ELEM_META_SIZE + 1
+    _BLOCK_SENTINEL_DATA = (b'\0' * _BLOCK_SENTINEL_LENGTH)
+
+
 def write(fn, elem_root, version):
-    assert(elem_root.id == b'')
+    assert elem_root.id == b''
 
     with open(fn, 'wb') as f:
         write = f.write
         tell = f.tell
+
+        init_version(version)
 
         write(_HEAD_MAGIC)
         write(pack('<I', version))
