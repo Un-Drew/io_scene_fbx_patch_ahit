@@ -273,6 +273,8 @@ DEF_IMPORT_ACTION_DOMAIN = True
 # For vanilla behaviour, change this one to False
 DEF_EXPORT_DONT_ADD_ARMATURE_BONE = True
 # For vanilla behaviour, change this one to False
+DEF_EXPORT_SCALE_INHERITANCE = True
+# For vanilla behaviour, change this one to False
 DEF_EXPORT_FORCE_ALIGNED_SCALING = True
 # For vanilla behaviour, change this one to False
 DEF_EXPORT_MATRIX_DOUBLE_PRECISION = False
@@ -814,6 +816,14 @@ class ExportFBX_patch_ahit(bpy.types.Operator, ExportHelper):
         default=DEF_EXPORT_DONT_ADD_ARMATURE_BONE,
     )
     # UnDrew Add End
+    # UnDrew Add Start : Support for exporting scale inheritance (per-bone Inherit Scale property).
+    UE3_export_scale_inheritance: BoolProperty(
+        name="UE3 - Export Scale Inheritance",
+        description="If enabled, the per-bone Inherit Scale property is correctly exported "
+        "(AHiT supports 'Aligned', 'Average', 'None')",
+        default=DEF_EXPORT_SCALE_INHERITANCE,
+    )
+    # UnDrew Add End
     # UnDrew Add Start : Force Aligned scaling.
     UE3_force_aligned_scaling: BoolProperty(
         name="UE3 - Force Aligned Scaling",
@@ -1114,14 +1124,19 @@ def export_panel_armature(body: bpy.types.UILayout, operator: bpy.types.Operator
     body.prop(operator, "armature_nodetype")
     body.prop(operator, "use_armature_deform_only")
     body.prop(operator, "add_leaf_bones")
-    # UnDrew Add Start : Fix for Blender adding an extra root bone with the name of the Armature.
-    body.prop(operator, "UE3_dont_add_armature_bone")
-    # UnDrew Add End
-    # UnDrew Add Start : Force Aligned scaling.
-    body.prop(operator, "UE3_force_aligned_scaling")
-    # UnDrew Add End
-    # UnDrew Add Start : Matrix double precision.
-    row = body.row()
+    # UnDrew Add Start : Custom armature export settings.
+    sublayout = body.column()
+    sublayout.use_property_split = False  # These property names are pretty long, let's use all available space.
+    # Fix for Blender adding an extra root bone with the name of the Armature.
+    sublayout.prop(operator, "UE3_dont_add_armature_bone")
+    # Support for exporting scale inheritance (per-bone Inherit Scale property).
+    sublayout.prop(operator, "UE3_export_scale_inheritance")
+    # Force Aligned scaling.
+    row = sublayout.row()
+    row.enabled = operator.UE3_export_scale_inheritance
+    row.prop(operator, "UE3_force_aligned_scaling")
+    # Matrix double precision.
+    row = sublayout.row()
     row.prop(operator, "UE3_matrix_double_precision")
     row.label(text="", icon='ERROR')
     # UnDrew Add End

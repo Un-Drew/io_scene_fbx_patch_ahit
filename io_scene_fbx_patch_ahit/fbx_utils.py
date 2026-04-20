@@ -1861,7 +1861,7 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         Blender's 'ALIGNED' is like 'NONE', but it also copies the parent's final scale with shear removed, and applies
         it to the current bone.
         """
-        if self.is_bone and self.bdata.parent:
+        if settings.UE3_export_scale_inheritance and self.is_bone and self.bdata.parent:
             inherit_scale = self.bdata.inherit_scale
             if inherit_scale in {'ALIGNED', 'NONE', 'AVERAGE'} or settings.UE3_force_aligned_scaling:
                 # ALIGNED/NONE/AVERAGE are interchangeable here (each one's effect can be replicated with another).
@@ -2174,7 +2174,7 @@ FBXExportSettings = namedtuple("FBXExportSettings", (
     "UE3_dont_add_armature_bone", "UE3_matrix_double_precision",
     "UE3_rest_default_pose", "UE3_remove_anim_object_prefix", "UE3_nla_modular_anim_support",
     "UE3_nla_only_animate_owner", "UE3_nla_force_export",
-    "UE3_force_aligned_scaling",
+    "UE3_export_scale_inheritance", "UE3_force_aligned_scaling",
     # UnDrew Add End
     # UnDrew Add Start : Not settings, but should be held here for performance reasons.
     "UE3_global_matrix_no_scale",
