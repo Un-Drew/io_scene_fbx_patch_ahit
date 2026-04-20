@@ -1863,7 +1863,7 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         """
         if self.is_bone and self.bdata.parent:
             inherit_scale = self.bdata.inherit_scale
-            if inherit_scale in {'ALIGNED', 'NONE', 'AVERAGE'}:
+            if inherit_scale in {'ALIGNED', 'NONE', 'AVERAGE'} or settings.UE3_force_aligned_scaling:
                 # ALIGNED/NONE/AVERAGE are interchangeable here (each one's effect can be replicated with another).
                 # ALIGNED != RrSs, but in most cases it's a good substitute.
                 if api_compat.HAS_BONE_ALIGNED_INHERIT_SCALE:
@@ -2172,7 +2172,9 @@ FBXExportSettings = namedtuple("FBXExportSettings", (
     "armature_nodetype", "use_armature_deform_only", "add_leaf_bones",
     # UnDrew Add Start : New settings that need to be passed to the exporter's "settings" var.
     "UE3_dont_add_armature_bone", "UE3_matrix_double_precision",
-    "UE3_rest_default_pose", "UE3_remove_anim_object_prefix", "UE3_nla_modular_anim_support", "UE3_nla_only_animate_owner", "UE3_nla_force_export",
+    "UE3_rest_default_pose", "UE3_remove_anim_object_prefix", "UE3_nla_modular_anim_support",
+    "UE3_nla_only_animate_owner", "UE3_nla_force_export",
+    "UE3_force_aligned_scaling",
     # UnDrew Add End
     # UnDrew Add Start : Not settings, but should be held here for performance reasons.
     "UE3_global_matrix_no_scale",

@@ -3972,6 +3972,7 @@ def save_single(operator, scene, depsgraph, filepath="",
                 UE3_nla_modular_anim_support=True,
                 UE3_nla_only_animate_owner=True,
                 UE3_nla_force_export=False,
+                UE3_force_aligned_scaling=True,
                 # UnDrew Add End
                 primary_bone_axis='Y',
                 secondary_bone_axis='X',
@@ -4055,7 +4056,9 @@ def save_single(operator, scene, depsgraph, filepath="",
         armature_nodetype, use_armature_deform_only, add_leaf_bones,
         # UnDrew Add Start : New export settings.
         UE3_dont_add_armature_bone, UE3_matrix_double_precision,
-        UE3_rest_default_pose, UE3_remove_anim_object_prefix, UE3_nla_modular_anim_support, UE3_nla_only_animate_owner, UE3_nla_force_export,
+        UE3_rest_default_pose, UE3_remove_anim_object_prefix, UE3_nla_modular_anim_support,
+        UE3_nla_only_animate_owner, UE3_nla_force_export,
+        UE3_force_aligned_scaling,
         # UnDrew Add End
         # UnDrew Add Start : Not settings, but should be held here for performance reasons.
         UE3_global_matrix_no_scale,
