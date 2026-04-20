@@ -1664,6 +1664,10 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         "UE3_is_empty", "UE3_empty_chain_parent", "UE3_empty_chain_offset_matrix",
         "UE3_empty_chain_scale_matrix", "UE3_empty_chain_scale_matrix_inv",
         # UnDrew Add End
+        # UnDrew Add Start : Store InheritType-related values.
+        "UE3_inherit_type",  # Cache the inherit type, since it only needs to be evaluated once.
+        "UE3_bone_last_pose_matrix",  # Cache the calculated transform in pose-space so child bones can use it.
+        # UnDrew Add End
         '_tag', '_ref', '_dupli_matrix'
     )
 
@@ -1671,6 +1675,16 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
     def cache_clear(cls):
         if hasattr(cls, "_cache"):
             del cls._cache
+
+    # UnDrew Add Start : Make settings global to avoid constantly passing them around.
+    @classmethod
+    def set_settings(cls, settings):
+        cls._settings = settings
+
+    @classmethod
+    def get_settings(cls):
+        return cls._settings
+    # UnDrew Add End
 
     @staticmethod
     def _get_dup_num_id(bdata):
@@ -1723,6 +1737,9 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         # UnDrew Add Start : This has to be initialized somewhere...
         self.UE3_is_empty = False
         # UnDrew Add End
+        # UnDrew Add Start : Init inherit_type.
+        self.UE3_inherit_type = self.UE3_get_inherit_type(self.get_settings())
+        # UnDrew Add End
 
     def __eq__(self, other):
         return isinstance(other, self.__class__) and self.key == other.key
@@ -1768,47 +1785,62 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         return None
     bdata_pose_bone = property(get_bdata_pose_bone)
 
-    # UnDrew Add Start : InheritType support. AHiT only natively supports RrSs, or Rrs which it can losslessly convert.
-    def get_bone_matrix_local_for_inherit_scale(self, par, inherit_scale_to_use):
+    # UnDrew Add Start : Functions necessary for InheritType support.
+    def UE3_bone_local_to_pose(self, matrix, invert=False):
         """
-        Get the parent-relative loc, rot, scale of a bone with a forced inherit_scale. This isn't quite a "real"
-        transform matrix (not meant to converted in global space), but it's needed like this for `fbx_object_matrix()`,
-        so it can be used by `fbx_object_tx()`.
+        Converts the bone's matrix from Local to Pose (or back, if invert=True). Takes inherit_type into account.
         """
-        pbone = self._ref.pose.bones[self.bdata.name]
-        saved_pose_matrix = pbone.matrix.copy()
+        par = self.parent
+        par_pose_mat = par.UE3_bone_last_pose_matrix if par.is_bone else Matrix()
+        if self.UE3_inherit_type == 1:  # == RSrs
+            if invert:
+                return par_pose_mat.inverted_safe() @ matrix
+            else:
+                return par_pose_mat @ matrix
+        else:
+            inherit_scale_to_use = ('ALIGNED' if self.UE3_inherit_type == 0 else 'NONE')
 
-        org_inherit_scale = self.bdata.inherit_scale
-        org_no_local_location = not self.bdata.use_local_location
-        org_no_inherit_rotation = not self.bdata.use_inherit_rotation
+            org_inherit_scale = self.bdata.inherit_scale
+            org_no_local_location = not self.bdata.use_local_location
+            org_no_inherit_rotation = not self.bdata.use_inherit_rotation
 
-        if org_inherit_scale != inherit_scale_to_use:
-            self.bdata.inherit_scale = inherit_scale_to_use
-        # `convert_local_to_pose()` takes `use_local_location`, `use_inherit_rotation` into account which we don't want.
-        if org_no_local_location:
-            self.bdata.use_local_location = True
-        if org_no_inherit_rotation:
-            self.bdata.use_inherit_rotation = True
-        try:
-            # Convert Pose (in "global" armature space) -> Local (in rest-relative space) -> parent-relative. Confusing!
-            r = self.matrix_rest_local @ self.bdata.convert_local_to_pose(
-                saved_pose_matrix,
-                pbone.bone.matrix_local,
-                parent_matrix=pbone.parent.matrix,
-                parent_matrix_local=pbone.parent.bone.matrix_local,
-                invert=True  # Pose->Local, not Local->Pose.
-            )
-        finally:
             if org_inherit_scale != inherit_scale_to_use:
-                self.bdata.inherit_scale = org_inherit_scale
+                self.bdata.inherit_scale = inherit_scale_to_use
+            # `convert_local_to_pose()` takes these flags into account, which we don't want.
             if org_no_local_location:
-                self.bdata.use_local_location = False
+                self.bdata.use_local_location = True
             if org_no_inherit_rotation:
-                self.bdata.use_inherit_rotation = False
+                self.bdata.use_inherit_rotation = True
+            try:
+                if invert:
+                    # Pose Space (armature-relative) -> Blender Local Space (rest-rel) -> FBX Local Space (parent-rel).
+                    r = self.matrix_rest_local @ self.bdata.convert_local_to_pose(
+                        matrix,
+                        self.bdata.matrix_local,
+                        parent_matrix=par_pose_mat,
+                        parent_matrix_local=par.bdata.matrix_local,
+                        invert=True
+                    )
+                else:
+                    # FBX Local Space (parent-relative) -> Blender Local Space (rest-rel) -> Pose Space (armature-rel).
+                    r = self.bdata.convert_local_to_pose(
+                        self.matrix_rest_local.inverted_safe() @ matrix,
+                        self.bdata.matrix_local,
+                        parent_matrix=par_pose_mat,
+                        parent_matrix_local=par.bdata.matrix_local,
+                        invert=False
+                    )
+            finally:
+                if org_inherit_scale != inherit_scale_to_use:
+                    self.bdata.inherit_scale = org_inherit_scale
+                if org_no_local_location:
+                    self.bdata.use_local_location = False
+                if org_no_inherit_rotation:
+                    self.bdata.use_inherit_rotation = False
 
-        return r
+            return r
 
-    def get_inherit_type(self):
+    def UE3_get_inherit_type(self, settings):
         """
         Get the inherit_type that the exporter should write. Also used by `get_matrix_local()` to determine how to
         get the transform.
@@ -1844,7 +1876,6 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
                 return 1  # RSrs
         else:
             return 1  # RSrs
-    inherit_type = property(get_inherit_type)
     # UnDrew Add End
 
     def get_matrix_local(self):
@@ -1853,15 +1884,24 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
         elif self._tag == 'DP':
             return self._ref.matrix_world.inverted_safe() @ self._dupli_matrix
         else:  # 'BO', current pose
-            # PoseBone.matrix is in armature space, bring in back in real local one!
-            par = self.bdata.parent
-            # UnDrew Add Start : Deliberate support for other scale inheritance modes.
-            inherit_type = self.inherit_type
-            if par and inherit_type != 1:  # != RSrs
-                return self.get_bone_matrix_local_for_inherit_scale(par, 'ALIGNED' if inherit_type == 0 else 'NONE')
+            # UnDrew Add Start : Refactored matrix calculation to facilitate InheritType logic.
+            # Pose Space -> FBX Local Space.
+            m = self.UE3_bone_local_to_pose(self._ref.pose.bones[self.bdata.name].matrix.copy(), invert=True)
+            # `m` is in FBX local-space, which will be decomposed into loc, rot, scale. This may have shear (e.g. due to
+            # force-exporting as Aligned), which can't be preserved. Once removed, it'll inevitably change how this bone
+            # looks, but it'll also affect the positioning of child bones. To avoid errors from accumulating with each
+            # subsequent child, remove shear, then convert to pose-space, so child bones use it as a basis.
+            l, r, s = m.decompose()
+            m = Matrix.LocRotScale(l, r, s)
+            self.UE3_bone_last_pose_matrix = self.UE3_bone_local_to_pose(m, invert=False)
+            return m
             # UnDrew Add End
-            par_mat_inv = self._ref.pose.bones[par.name].matrix.inverted_safe() if par else Matrix()
-            return par_mat_inv @ self._ref.pose.bones[self.bdata.name].matrix
+
+            # UnDrew Comment Start : Old logic.
+            #       # PoseBone.matrix is in armature space, bring in back in real local one!
+            #       par_mat_inv = self._ref.pose.bones[par.name].matrix.inverted_safe() if par else Matrix()
+            #       return par_mat_inv @ self._ref.pose.bones[self.bdata.name].matrix
+            # UnDrew Comment End
     matrix_local = property(get_matrix_local)
 
     def get_matrix_global(self):
@@ -2065,7 +2105,23 @@ class ObjectWrapper(metaclass=MetaObjectWrapper):
 
     def get_bones(self):
         if self._tag == 'OB' and self.bdata.type == 'ARMATURE':
-            return (ObjectWrapper(bo, self.bdata) for bo in self.bdata.data.bones)
+            # UnDrew Add Start : For my InheritType logic, I need to evaluate a bone's transform *before* its children.
+            #                    `Armature.bones` might not guarantee that order, so this was rewritten.
+            bones = []
+            def dfs(b):
+                bones.append(ObjectWrapper(b, self.bdata))
+                for child in b.children:
+                    dfs(child)
+            # NOTE: I really thought `Armature` had something like a list of root bones. :/
+            for b in self.bdata.data.bones:
+                if b.parent:
+                    continue
+                dfs(b)
+            return tuple(bones)
+            # UnDrew Add End
+            # UnDrew Comment Start : Old logic.
+            #       return (ObjectWrapper(bo, self.bdata) for bo in self.bdata.data.bones)
+            # UnDrew Comment End
         return ()
     bones = property(get_bones)
 

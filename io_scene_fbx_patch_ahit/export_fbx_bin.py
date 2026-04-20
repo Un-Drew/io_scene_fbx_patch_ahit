@@ -2241,7 +2241,7 @@ def fbx_data_object_elements(root, ob_obj, scene_data):
     elem_props_template_set(tmpl, props, "p_integer", b"DefaultAttributeIndex", 0)
 
     # UnDrew Edit Start : Apply the proper InheritType of objects (rather than hardcoding it as RSrs (1)).
-    elem_props_template_set(tmpl, props, "p_enum", b"InheritType", ob_obj.inherit_type)
+    elem_props_template_set(tmpl, props, "p_enum", b"InheritType", ob_obj.UE3_inherit_type)
     # UnDrew Edit End
 
     # Custom properties.
@@ -2501,15 +2501,20 @@ def fbx_animations_do(scene_data, ref_id, f_start, f_end, start_zero, objects=No
     gscale = scene_data.settings.global_scale
 
     if objects is not None:
+        # UnDrew Add Start : Sets are unordered, but InheritType requires parent-first order. Use dicts instead.
+        objects = {ob_obj: None for ob_obj in objects}
+        # UnDrew Add End
         # Add bones and duplis!
         for ob_obj in tuple(objects):
             if not ob_obj.is_object:
                 continue
             if ob_obj.type == 'ARMATURE':
-                objects |= {bo_obj for bo_obj in ob_obj.bones if bo_obj in scene_data.objects}
+                # UnDrew Edit : Use dicts instead.
+                objects |= {bo_obj: None for bo_obj in ob_obj.bones if bo_obj in scene_data.objects}
             for dp_obj in ob_obj.dupli_list_gen(depsgraph):
                 if dp_obj in scene_data.objects:
-                    objects.add(dp_obj)
+                    # UnDrew Edit : Use dicts instead.
+                    objects[dp_obj] = None
     else:
         objects = scene_data.objects
 
@@ -4060,6 +4065,10 @@ def save_single(operator, scene, depsgraph, filepath="",
         bake_anim_step, bake_anim_simplify_factor, bake_anim_force_startend_keying,
         False, media_settings, use_custom_props, colors_type, prioritize_active_color
     )
+
+    # UnDrew Add Start : Make settings global in `fbx_utils.ObjectWrapper` to avoid constantly passing them around.
+    ObjectWrapper.set_settings(settings)
+    # UnDrew Add End
 
     import bpy_extras.io_utils
 
