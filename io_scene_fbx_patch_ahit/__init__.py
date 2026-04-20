@@ -273,6 +273,8 @@ DEF_IMPORT_ACTION_DOMAIN = True
 # For vanilla behaviour, change this one to False
 DEF_EXPORT_DONT_ADD_ARMATURE_BONE = True
 # For vanilla behaviour, change this one to False
+DEF_EXPORT_FORCE_ALIGNED_SCALING = True
+# For vanilla behaviour, change this one to False
 DEF_EXPORT_MATRIX_DOUBLE_PRECISION = False
 # For vanilla behaviour, change this one to False
 DEF_EXPORT_NLA_MODULAR_ANIM_SUPPORT = False
@@ -812,6 +814,14 @@ class ExportFBX_patch_ahit(bpy.types.Operator, ExportHelper):
         default=DEF_EXPORT_DONT_ADD_ARMATURE_BONE,
     )
     # UnDrew Add End
+    # UnDrew Add Start : Force Aligned scaling.
+    UE3_force_aligned_scaling: BoolProperty(
+        name="UE3 - Force Aligned Scaling",
+        description="If enabled, force-exports all bones with 'Aligned' Inherit Scale, attempting to preserve "
+                    "scaling animation as much as possible (more accurate than AHiT's default conversion)",
+        default=DEF_EXPORT_FORCE_ALIGNED_SCALING,
+    )
+    # UnDrew Add End
     # UnDrew Add Start : Matrix double precision.
     UE3_matrix_double_precision: BoolProperty(
         name="UE3 - Matrix Double Precision",
@@ -1106,6 +1116,9 @@ def export_panel_armature(body: bpy.types.UILayout, operator: bpy.types.Operator
     body.prop(operator, "add_leaf_bones")
     # UnDrew Add Start : Fix for Blender adding an extra root bone with the name of the Armature.
     body.prop(operator, "UE3_dont_add_armature_bone")
+    # UnDrew Add End
+    # UnDrew Add Start : Force Aligned scaling.
+    body.prop(operator, "UE3_force_aligned_scaling")
     # UnDrew Add End
     # UnDrew Add Start : Matrix double precision.
     row = body.row()
